@@ -6,32 +6,145 @@
     <title>Research Lab | Dentour Protocol MT5</title>
     <link rel="icon" href="/static/favicon.ico?v=2">
     <style>
-        :root { color-scheme: dark; --bg:#0d1117; --panel:#161b22; --border:#30363d; --text:#c9d1d9; --muted:#8b949e; --blue:#58a6ff; --green:#3fb950; --yellow:#d29922; --red:#f85149; }
+        :root {
+            color-scheme: dark;
+            --bg: #09090b;
+            --panel: #18181b;
+            --border: #27272a;
+            --text: #e4e4e7;
+            --text-dim: #a1a1aa;
+            --text-faint: #71717a;
+            --blue: #3b82f6;
+            --emerald: #10b981;
+            --amber: #d97706;
+            --red: #f87171;
+        }
+
         * { box-sizing: border-box; }
-        body { margin:0; background:var(--bg); color:var(--text); font-family:Consolas,"Courier New",monospace; }
-        .page { width:min(1500px,calc(100% - 32px)); margin:auto; padding:20px 0 42px; }
-        .topbar,.panel,.metric { background:var(--panel); border:1px solid var(--border); border-radius:8px; }
-        .topbar { display:flex; justify-content:space-between; gap:16px; align-items:center; padding:17px; flex-wrap:wrap; }
-        h1 { margin:0 0 6px; font-size:21px; color:#f0f6fc; } h2 { margin:0 0 14px; font-size:16px; color:#f0f6fc; }
-        p { line-height:1.55; } .muted { color:var(--muted); margin:0; }
-        .nav { display:flex; gap:9px; flex-wrap:wrap; }
-        .button,button { display:inline-flex; align-items:center; justify-content:center; min-height:38px; padding:0 14px; border:1px solid var(--border); border-radius:6px; background:#21262d; color:var(--text); text-decoration:none; cursor:pointer; font:inherit; }
-        button.primary { background:#1f6feb; border-color:#388bfd; }
-        .panel { margin-top:16px; padding:17px; overflow:auto; }
-        form { display:flex; align-items:end; gap:12px; flex-wrap:wrap; }
-        label { display:grid; gap:6px; color:var(--muted); font-size:13px; }
-        input,select { min-height:38px; padding:8px 10px; border:1px solid var(--border); border-radius:6px; background:#0d1117; color:var(--text); font:inherit; }
-        .metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px; margin-top:16px; }
-        .metric { padding:14px; } .metric span { display:block; color:var(--muted); font-size:12px; margin-bottom:8px; } .metric strong { color:var(--blue); font-size:17px; }
-        .error { margin-top:16px; padding:14px; border:1px solid var(--red); border-radius:7px; color:#ffb3ad; background:#210f12; white-space:pre-wrap; }
-        .warning { padding:12px; border:1px solid var(--yellow); border-radius:7px; color:#e3b341; }
-        .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(480px,1fr)); gap:16px; }
-        table.data-table { width:100%; border-collapse:collapse; font-size:12px; }
-        .data-table th,.data-table td { border:1px solid var(--border); padding:8px; text-align:right; white-space:nowrap; }
-        .data-table th { color:var(--muted); background:#0d1117; }
-        dl { display:grid; grid-template-columns:minmax(190px,auto) 1fr; gap:8px 16px; margin:0; font-size:13px; }
-        dt { color:var(--muted); } dd { margin:0; overflow-wrap:anywhere; }
-        @media(max-width:700px){ .page{width:calc(100% - 18px)} .grid{grid-template-columns:1fr} form>*{width:100%} }
+
+        body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--text);
+            font-family: system-ui, -apple-system, sans-serif;
+            line-height: 1.55;
+        }
+
+        .page { width: min(1500px, calc(100% - 32px)); margin: auto; padding: 20px 0 42px; }
+
+        .topbar, .panel, .metric {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+
+        .topbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+            padding: 17px;
+            flex-wrap: wrap;
+            border-bottom: 1px solid var(--border);
+        }
+
+        h1 { margin: 0 0 6px; font-size: 21px; font-weight: 600; letter-spacing: -.01em; color: #f4f4f5; }
+        h2 { margin: 0 0 14px; font-size: 15px; font-weight: 600; letter-spacing: -.005em; color: #f4f4f5; }
+        p { margin: 0; }
+        .muted { color: var(--text-dim); margin: 0; }
+
+        .nav { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+        .button, button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 36px;
+            padding: 0 14px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: #27272a;
+            color: var(--text);
+            text-decoration: none;
+            cursor: pointer;
+            font: inherit;
+            font-size: 14px;
+            transition: opacity .15s ease, background .15s ease, border-color .15s ease;
+        }
+
+        .button:hover, button:hover { opacity: .7; background: #3f3f46; border-color: #52525b; }
+
+        button.primary { background: #1d4ed8; border-color: #2563eb; }
+        button.primary:hover { background: #2563eb; opacity: 1; }
+
+        .panel { margin-top: 16px; padding: 17px; overflow: auto; }
+
+        .panel.accent-blue { background: rgba(23, 37, 84, .35); border-color: #1e3a8a; }
+        .panel.accent-amber { background: rgba(69, 26, 3, .35); border-color: #78350f; }
+
+        form { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; }
+        label { display: grid; gap: 6px; color: var(--text-dim); font-size: 13px; }
+
+        input, select {
+            min-height: 38px;
+            padding: 8px 10px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: #000000;
+            color: var(--text);
+            font: inherit;
+            font-size: 14px;
+            transition: border-color .15s ease;
+        }
+
+        input:hover, select:hover { border-color: #3f3f46; }
+        input:focus, select:focus { outline: none; border-color: #3b82f6; }
+
+        .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-top: 16px; }
+        .metrics.accent-emerald {
+            padding: 14px;
+            border-radius: 8px;
+            border: 1px solid #047857;
+            background: rgba(6, 78, 59, .35);
+        }
+
+        .metric { padding: 14px; }
+        .metric span { display: block; color: var(--text-dim); font-size: 12px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: .04em; }
+        .metric strong { color: var(--blue); font-size: 17px; font-weight: 600; }
+
+        .error {
+            margin-top: 16px;
+            padding: 14px;
+            border: 1px solid #7f1d1d;
+            border-radius: 7px;
+            color: #fca5a5;
+            background: rgba(127, 29, 29, .18);
+            white-space: pre-wrap;
+        }
+
+        .warning {
+            padding: 12px 14px;
+            border: 1px solid #78350f;
+            border-radius: 7px;
+            color: #fbbf24;
+            background: rgba(69, 26, 3, .30);
+        }
+
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(480px, 1fr)); gap: 16px; }
+
+        table.data-table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+        .data-table th, .data-table td { border: 1px solid var(--border); padding: 8px; text-align: right; white-space: nowrap; }
+        .data-table th { color: var(--text-dim); background: var(--bg); font-weight: 600; }
+
+        dl { display: grid; grid-template-columns: minmax(190px, auto) 1fr; gap: 8px 16px; margin: 0; font-size: 13px; }
+        dt { color: var(--text-dim); }
+        dd { margin: 0; overflow-wrap: anywhere; }
+
+        @media (max-width: 700px) {
+            .page { width: calc(100% - 18px); }
+            .grid { grid-template-columns: 1fr; }
+            form > * { width: 100%; }
+        }
     </style>
 </head>
 <body>
@@ -41,7 +154,7 @@
         <nav class="nav"><a class="button" href="/">Dashboard</a><a class="button" href="/war-room/">War Room</a></nav>
     </header>
 
-    <section class="panel">
+    <section class="panel accent-blue">
         <h2>Ejecutar experimento mensual</h2>
         <form method="get" action="/research/analyze">
             <label>Año<input type="number" name="year" value="{{ year }}" min="1970" max="9998" required></label>
@@ -56,7 +169,7 @@
     {% if error %}<section class="error">{{ error }}</section>{% endif %}
 
     {% if executed and not error %}
-    <section class="metrics">
+    <section class="metrics accent-emerald">
         <article class="metric"><span>Sesión</span><strong>{{ session_label }}</strong></article>
         <article class="metric"><span>Features válidas</span><strong>{{ feature_report.output_rows }}</strong></article>
         <article class="metric"><span>Targets válidos</span><strong>{{ target_report.output_observations }}</strong></article>
@@ -82,7 +195,7 @@
         <section class="panel"><h2>Baseline por régimen ATR</h2>{{ volatility_baseline_table|safe }}</section>
     </div>
 
-    <section class="panel">
+    <section class="panel accent-amber">
         <h2>División temporal de desarrollo</h2>
         {% if split %}
         <div class="metrics">

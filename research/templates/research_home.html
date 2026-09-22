@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="es">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Research Lab | Dentour Protocol MT5</title>
+    <link rel="icon" href="/static/favicon.ico?v=2">
+    <style>
+        :root { color-scheme: dark; --bg:#0d1117; --panel:#161b22; --border:#30363d; --text:#c9d1d9; --muted:#8b949e; --blue:#58a6ff; --green:#3fb950; --yellow:#d29922; --red:#f85149; }
+        * { box-sizing: border-box; }
+        body { margin:0; background:var(--bg); color:var(--text); font-family:Consolas,"Courier New",monospace; }
+        .page { width:min(1500px,calc(100% - 32px)); margin:auto; padding:20px 0 42px; }
+        .topbar,.panel,.metric { background:var(--panel); border:1px solid var(--border); border-radius:8px; }
+        .topbar { display:flex; justify-content:space-between; gap:16px; align-items:center; padding:17px; flex-wrap:wrap; }
+        h1 { margin:0 0 6px; font-size:21px; color:#f0f6fc; } h2 { margin:0 0 14px; font-size:16px; color:#f0f6fc; }
+        p { line-height:1.55; } .muted { color:var(--muted); margin:0; }
+        .nav { display:flex; gap:9px; flex-wrap:wrap; }
+        .button,button { display:inline-flex; align-items:center; justify-content:center; min-height:38px; padding:0 14px; border:1px solid var(--border); border-radius:6px; background:#21262d; color:var(--text); text-decoration:none; cursor:pointer; font:inherit; }
+        button.primary { background:#1f6feb; border-color:#388bfd; }
+        .panel { margin-top:16px; padding:17px; overflow:auto; }
+        form { display:flex; align-items:end; gap:12px; flex-wrap:wrap; }
+        label { display:grid; gap:6px; color:var(--muted); font-size:13px; }
+        input,select { min-height:38px; padding:8px 10px; border:1px solid var(--border); border-radius:6px; background:#0d1117; color:var(--text); font:inherit; }
+        .metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px; margin-top:16px; }
+        .metric { padding:14px; } .metric span { display:block; color:var(--muted); font-size:12px; margin-bottom:8px; } .metric strong { color:var(--blue); font-size:17px; }
+        .error { margin-top:16px; padding:14px; border:1px solid var(--red); border-radius:7px; color:#ffb3ad; background:#210f12; white-space:pre-wrap; }
+        .warning { padding:12px; border:1px solid var(--yellow); border-radius:7px; color:#e3b341; }
+        .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(480px,1fr)); gap:16px; }
+        table.data-table { width:100%; border-collapse:collapse; font-size:12px; }
+        .data-table th,.data-table td { border:1px solid var(--border); padding:8px; text-align:right; white-space:nowrap; }
+        .data-table th { color:var(--muted); background:#0d1117; }
+        dl { display:grid; grid-template-columns:minmax(190px,auto) 1fr; gap:8px 16px; margin:0; font-size:13px; }
+        dt { color:var(--muted); } dd { margin:0; overflow-wrap:anywhere; }
+        @media(max-width:700px){ .page{width:calc(100% - 18px)} .grid{grid-template-columns:1fr} form>*{width:100%} }
+    </style>
+</head>
+<body>
+<main class="page">
+    <header class="topbar">
+        <div><h1>Dentour Protocol MT5 | Research Lab</h1><p class="muted">Dataset causal, targets, baselines y validación temporal por sesión</p></div>
+        <nav class="nav"><a class="button" href="/">Dashboard</a><a class="button" href="/war-room/">War Room</a></nav>
+    </header>
+
+    <section class="panel">
+        <h2>Ejecutar experimento mensual</h2>
+        <form method="get" action="/research/analyze">
+            <label>Año<input type="number" name="year" value="{{ year }}" min="1970" max="9998" required></label>
+            <label>Mes<input type="number" name="month" value="{{ month }}" min="1" max="12" required></label>
+            <label>Sesión<select id="session-code" name="session_code">{% for item in session_options %}<option value="{{ item.code }}" {% if item.code == session_code %}selected{% endif %}>{{ item.label }}</option>{% endfor %}</select></label>
+            <label>Inicio COT<input id="session-start" type="time" name="session_start" value="{{ session_start }}" required></label>
+            <label>Fin COT<input id="session-end" type="time" name="session_end" value="{{ session_end }}" required></label>
+            <button class="primary" type="submit">Validar Research</button>
+        </form>
+    </section>
+
+    {% if error %}<section class="error">{{ error }}</section>{% endif %}
+
+    {% if executed and not error %}
+    <section class="metrics">
+        <article class="metric"><span>Sesión</span><strong>{{ session_label }}</strong></article>
+        <article class="metric"><span>Features válidas</span><strong>{{ feature_report.output_rows }}</strong></article>
+        <article class="metric"><span>Targets válidos</span><strong>{{ target_report.output_observations }}</strong></article>
+        <article class="metric"><span>Dataset final</span><strong>{{ dataset_report.rows }}</strong></article>
+        <article class="metric"><span>Variables X</span><strong>{{ dataset_report.feature_count }}</strong></article>
+        <article class="metric"><span>Tiempo total</span><strong>{{ '%.1f'|format(elapsed_ms) }} ms</strong></article>
+    </section>
+
+    <section class="panel warning">{{ model_status }}</section>
+
+    <div class="grid">
+        <section class="panel"><h2>Carga histórica</h2>{{ historical_table|safe }}</section>
+        <section class="panel"><h2>Reporte de features</h2><dl>{% for key,value in feature_report.items() %}{% if key != 'feature_columns' %}<dt>{{ key }}</dt><dd>{{ value }}</dd>{% endif %}{% endfor %}</dl></section>
+        <section class="panel"><h2>Reporte de targets</h2><dl>{% for key,value in target_report.items() %}{% if key != 'target_columns' %}<dt>{{ key }}</dt><dd>{{ value }}</dd>{% endif %}{% endfor %}</dl></section>
+        <section class="panel"><h2>Reporte del dataset</h2><dl>{% for key,value in dataset_report.items() %}{% if key not in ('feature_columns','target_columns') %}<dt>{{ key }}</dt><dd>{{ value }}</dd>{% endif %}{% endfor %}</dl></section>
+    </div>
+
+    <section class="panel"><h2>Baseline global</h2>{{ global_baseline_table|safe }}</section>
+    <section class="panel"><h2>Baseline por sesión</h2>{{ session_baseline_table|safe }}</section>
+    <section class="panel"><h2>Baseline por minuto de sesión</h2>{{ minute_baseline_table|safe }}</section>
+    <div class="grid">
+        <section class="panel"><h2>Baseline por día de semana</h2>{{ weekday_baseline_table|safe }}</section>
+        <section class="panel"><h2>Baseline por régimen ATR</h2>{{ volatility_baseline_table|safe }}</section>
+    </div>
+
+    <section class="panel">
+        <h2>División temporal de desarrollo</h2>
+        {% if split %}
+        <div class="metrics">
+            <article class="metric"><span>Train</span><strong>{{ split.train.height }}</strong></article>
+            <article class="metric"><span>Validation</span><strong>{{ split.validation.height }}</strong></article>
+            <article class="metric"><span>Test</span><strong>{{ split.test.height }}</strong></article>
+            <article class="metric"><span>Purga train</span><strong>{{ split.purged_train_rows }}</strong></article>
+            <article class="metric"><span>Purga validation</span><strong>{{ split.purged_validation_rows }}</strong></article>
+            <article class="metric"><span>Embargo</span><strong>{{ split.embargo_minutes }} min</strong></article>
+        </div>
+        {% else %}<p>{{ split_error }}</p>{% endif %}
+    </section>
+
+    <section class="panel"><h2>Vista previa del dataset</h2>{{ dataset_preview_table|safe }}</section>
+    {% endif %}
+</main>
+<script>
+const presets={asia:["19:00","23:00"],london:["02:00","05:00"],new_york:["07:00","10:00"],full_day:["00:00","00:00"]};
+const code=document.getElementById("session-code"),start=document.getElementById("session-start"),end=document.getElementById("session-end");
+code.addEventListener("change",()=>{if(presets[code.value]){[start.value,end.value]=presets[code.value];}});
+[start,end].forEach(input=>input.addEventListener("change",()=>{code.value="custom";}));
+</script>
+</body>
+</html>

@@ -7,6 +7,45 @@ Responsabilidades:
 - Agregar versiones y un identificador determinista por observación.
 - Construir datasets individuales o combinar sesiones compatibles.
 - No consultar archivos, no recalcular features/targets y no escribir a disco.
+
+GUÍA DIDÁCTICA AMPLIADA
+========================
+
+PROPÓSITO
+---------
+Este módulo convierte la salida de targets.py en el contrato final que podrán
+consumir baselines, validación y modelos. No calcula nuevas variables ni vuelve
+a consultar datos. Su tarea principal es separar explícitamente:
+
+    identificadores | contexto | features X | targets y | calidad | versiones
+
+PROTECCIÓN CONTRA DATA LEAKAGE
+------------------------------
+El módulo rechaza columnas futuras o derivadas del resultado, como MFE, MAE,
+triple barrera, timestamps futuros y columnas con prefijos target_ o future_.
+Esta defensa es independiente del modelo para que cualquier algoritmo posterior
+reciba el mismo contrato causal.
+
+IDENTIDAD Y REPRODUCIBILIDAD
+----------------------------
+Cada observación obtiene un observation_id determinista basado en símbolo,
+sesión, timestamp UTC y versión experimental. Además, un fingerprint SHA-256
+abreviado identifica el conjunto y orden de features y targets.
+
+COMBINACIÓN DE SESIONES
+-----------------------
+Los datasets solo pueden concatenarse cuando coinciden features, targets y
+esquema Polars. La identidad session_code se conserva como metadato, pero no se
+incluye automáticamente como feature numérica.
+
+ORDEN DE LECTURA
+----------------
+1. Listas de columnas y defensas contra fuga.
+2. DatasetReport y ResearchDataset.
+3. observation_id y fingerprint.
+4. Validación integral del DataFrame.
+5. Construcción de una sesión.
+6. Combinación de múltiples sesiones.
 """
 
 from __future__ import annotations
@@ -114,6 +153,9 @@ FORBIDDEN_FEATURE_COLUMNS: Final[frozenset[str]] = frozenset(
 
 
 @dataclass(frozen=True, slots=True)
+# -----------------------------------------------------------------------------
+# Contrato inmutable que resume tamaño, rango temporal y esquema del dataset.
+# -----------------------------------------------------------------------------
 class DatasetReport:
     """Resumen auditable del dataset construido."""
 
@@ -130,6 +172,9 @@ class DatasetReport:
 
 
 @dataclass(frozen=True, slots=True)
+# -----------------------------------------------------------------------------
+# Contenedor principal; mantiene X, y, identificadores y contexto separados.
+# -----------------------------------------------------------------------------
 class ResearchDataset:
     """Dataset final con contratos explícitos para entrenamiento posterior."""
 
@@ -158,6 +203,9 @@ class ResearchDataset:
         return self.data.select(self.identifiers)
 
 
+# -----------------------------------------------------------------------------
+# Conserva únicamente columnas realmente presentes sin alterar el orden declarado.
+# -----------------------------------------------------------------------------
 def _existing_columns(
     dataframe: pl.DataFrame,
     columns: Iterable[str],
@@ -166,6 +214,9 @@ def _existing_columns(
     return tuple(column for column in columns if column in available)
 
 
+# -----------------------------------------------------------------------------
+# Construye una clave legible y determinista para uniones y auditoría.
+# -----------------------------------------------------------------------------
 def _observation_id_expression(config: ExperimentConfig) -> pl.Expr:
     """Crea una clave legible; su unicidad se valida posteriormente."""
 
@@ -182,6 +233,9 @@ def _observation_id_expression(config: ExperimentConfig) -> pl.Expr:
     ).alias("observation_id")
 
 
+# -----------------------------------------------------------------------------
+# Resume versiones y orden de columnas en un hash estable de 16 caracteres.
+# -----------------------------------------------------------------------------
 def _schema_fingerprint(
     feature_columns: tuple[str, ...],
     target_columns: tuple[str, ...],
@@ -200,6 +254,9 @@ def _schema_fingerprint(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
+# -----------------------------------------------------------------------------
+# Primera barrera explícita contra targets o futuro dentro de X.
+# -----------------------------------------------------------------------------
 def validate_feature_contract(feature_columns: tuple[str, ...]) -> None:
     """Impide introducir targets o futuro dentro de X."""
 
@@ -224,6 +281,9 @@ def validate_feature_contract(feature_columns: tuple[str, ...]) -> None:
         )
 
 
+# -----------------------------------------------------------------------------
+# Auditoría integral antes de aceptar el dataset como entrenable.
+# -----------------------------------------------------------------------------
 def validate_dataset_frame(
     dataframe: pl.DataFrame,
     *,
@@ -308,6 +368,9 @@ def validate_dataset_frame(
             )
 
 
+# -----------------------------------------------------------------------------
+# Formaliza el dataset de una única sesión a partir de targets válidos.
+# -----------------------------------------------------------------------------
 def build_research_dataset(
     target_data: pl.DataFrame,
     feature_report: FeatureBuildReport,
@@ -422,6 +485,9 @@ def build_research_dataset(
     )
 
 
+# -----------------------------------------------------------------------------
+# Concatena sesiones solo cuando sus contratos son completamente compatibles.
+# -----------------------------------------------------------------------------
 def combine_research_datasets(
     datasets: Iterable[ResearchDataset],
     *,

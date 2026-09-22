@@ -2,6 +2,43 @@
 
 Mantiene compatibilidad con data_access.py, features.py y targets.py, y agrega
 alcance dinamico por sesiones sin ejecutar consultas ni entrenar modelos.
+
+GUÍA DIDÁCTICA AMPLIADA
+========================
+
+PROPÓSITO
+---------
+Este archivo define los contratos inmutables del laboratorio Research. No lee
+Parquet, no calcula features, no mide targets y no entrena modelos. Su función
+es expresar qué significa un experimento para que todos los módulos compartan
+la misma configuración.
+
+CONTRATOS PRINCIPALES
+---------------------
+- Timeframe limita temporalidades admitidas.
+- ReferencePrice define el precio desde el que se mide el futuro.
+- AmbiguousBarrierPolicy define qué hacer cuando OHLC M1 no revela el orden.
+- ResearchScope define cómo se organizan las sesiones.
+- ExperimentConfig versiona el experimento completo.
+- DatasetSplitConfig define train, validation, test y embargo.
+
+INMUTABILIDAD
+-------------
+Las dataclasses usan frozen=True para impedir cambios accidentales después de
+crear una configuración. slots=True evita atributos improvisados y reduce el
+costo por instancia.
+
+VERSIONADO
+----------
+feature_version, target_version, dataset_version y experiment_version permiten
+reconocer resultados construidos bajo contratos diferentes. Si cambia una
+regla temporal, una feature o un target, la versión correspondiente debe cambiar.
+
+SESIÓN PERSONALIZADA
+--------------------
+ExperimentConfig puede declarar session_code='custom', pero no contiene horas.
+Por eso la propiedad session exige que una SessionWindow personalizada sea
+inyectada explícitamente al builder.
 """
 
 from __future__ import annotations
@@ -17,22 +54,34 @@ from sessions import (
 )
 
 
+# -----------------------------------------------------------------------------
+# Enumera temporalidades válidas y evita cadenas arbitrarias.
+# -----------------------------------------------------------------------------
 class Timeframe(StrEnum):
     M1 = "m1"
     M15 = "m15"
     H1 = "h1"
 
 
+# -----------------------------------------------------------------------------
+# Declara desde qué precio confirmado se medirá la excursión futura.
+# -----------------------------------------------------------------------------
 class ReferencePrice(StrEnum):
     CLOSE = "close"
 
 
+# -----------------------------------------------------------------------------
+# Formaliza cómo tratar una barra que toca ambas barreras.
+# -----------------------------------------------------------------------------
 class AmbiguousBarrierPolicy(StrEnum):
     EXCLUDE = "exclude"
     CONSERVATIVE = "conservative"
     RESOLVE_WITH_TICKS = "resolve_with_ticks"
 
 
+# -----------------------------------------------------------------------------
+# Describe si las sesiones se estudian separadas o combinadas.
+# -----------------------------------------------------------------------------
 class ResearchScope(StrEnum):
     """Forma en que Research organiza las observaciones por sesion."""
 
@@ -42,6 +91,9 @@ class ResearchScope(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+# -----------------------------------------------------------------------------
+# Contrato versionado que viaja por features, targets y dataset.
+# -----------------------------------------------------------------------------
 class ExperimentConfig:
     """Configuracion versionada del experimento de expansion alcista."""
 
@@ -122,6 +174,9 @@ class ExperimentConfig:
 
 
 @dataclass(frozen=True, slots=True)
+# -----------------------------------------------------------------------------
+# Contrato de separación temporal y embargo.
+# -----------------------------------------------------------------------------
 class DatasetSplitConfig:
     minimum_train_months: int = 6
     validation_months: int = 1

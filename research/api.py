@@ -4,6 +4,78 @@ La ruta ejecuta de forma sincrónica y sin persistencia:
 Parquet -> contexto -> features -> targets -> dataset -> baselines -> split.
 
 No entrena modelos dentro de solicitudes HTTP.
+
+GUÍA DIDÁCTICA AMPLIADA
+========================
+
+PROPÓSITO
+---------
+Este módulo es la capa web del laboratorio Research. Recibe parámetros desde el
+navegador, ejecuta sincrónicamente el pipeline descriptivo y entrega resultados
+a una plantilla Jinja2. No descarga desde MetaTrader 5, no escribe Parquet, no
+persiste datasets y no entrena modelos.
+
+FLUJO HTTP
+----------
+GET /research/
+    Muestra el formulario y los controles sin ejecutar cálculos históricos.
+
+GET /research/analyze
+    Valida año, mes y sesión; después ejecuta:
+
+    periodo cerrado
+    -> carga M1/M15/H1
+    -> features causales
+    -> targets futuros
+    -> dataset
+    -> baselines
+    -> división provisional de un mes
+    -> contexto Jinja2
+    -> respuesta HTML
+
+SEPARACIÓN DE RESPONSABILIDADES
+-------------------------------
+- FastAPI valida parámetros y registra rutas.
+- data_access.py lee Parquet.
+- features.py calcula X causal.
+- targets.py calcula y histórico.
+- dataset.py formaliza el contrato.
+- baselines.py crea referencias simples.
+- validation.py construye el split provisional.
+- Jinja2 presenta los resultados.
+
+JINJA2
+------
+El objeto context contiene valores escalares, reportes convertidos con asdict y
+pequeñas tablas HTML. La plantilla research_home.html decide cómo presentarlos.
+El objeto Request debe incluirse porque Starlette/Jinja2 lo utiliza para crear
+la respuesta de plantilla.
+
+RENDIMIENTO
+-----------
+La solicitud es sincrónica y ejecuta el pipeline completo. Esto es adecuado para
+una herramienta local de desarrollo con periodos pequeños, pero no debe usarse
+para entrenamientos extensos. Las tablas se limitan con head() antes de pasar a
+Pandas y HTML.
+
+MANEJO DE ERRORES
+-----------------
+Los errores del split provisional se presentan de forma separada porque un
+dataset válido puede no tener suficientes días para dividirse. Los demás errores
+se capturan en la capa externa, se registran con traceback y se muestran como
+mensaje de interfaz.
+
+DEUDA TÉCNICA Y EVOLUCIÓN
+-------------------------
+- El año y mes predeterminados están fijados en agosto de 2026. Una futura
+  mejora puede seleccionar automáticamente el último mes cerrado.
+- El pipeline corre dentro de la petición. Si aumenta el histórico, deberá
+  migrarse a ejecuciones controladas con registro de estado y artefactos.
+- _table_html genera HTML interno y la plantilla lo presenta con safe. Solo debe
+  recibir tablas construidas por el backend, nunca HTML proporcionado por
+  usuarios.
+- Los errores técnicos se muestran con nombre de excepción. En una publicación
+  externa conviene ocultar detalles al usuario y conservarlos únicamente en logs.
 """
 
 from __future__ import annotations
@@ -40,6 +112,9 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 router = APIRouter(prefix="/research", tags=["Research"])
 
 
+# -----------------------------------------------------------------------------
+# Convierte únicamente resultados pequeños a HTML para evitar transferencias innecesarias.
+# -----------------------------------------------------------------------------
 def _table_html(frame: pl.DataFrame, *, max_rows: int = 40) -> str:
     """Convierte exclusivamente resultados pequeños a HTML."""
 
@@ -52,6 +127,9 @@ def _table_html(frame: pl.DataFrame, *, max_rows: int = 40) -> str:
     )
 
 
+# -----------------------------------------------------------------------------
+# Transforma los presets compartidos en opciones aptas para un selector HTML.
+# -----------------------------------------------------------------------------
 def _session_options() -> tuple[dict[str, str], ...]:
     return tuple(
         {"code": code, "label": session.label}
@@ -59,6 +137,9 @@ def _session_options() -> tuple[dict[str, str], ...]:
     ) + ({"code": "custom", "label": "Personalizada"},)
 
 
+# -----------------------------------------------------------------------------
+# Centraliza los valores del formulario para render inicial, éxito y error.
+# -----------------------------------------------------------------------------
 def _base_context(
     *,
     year: int,
@@ -78,6 +159,9 @@ def _base_context(
 
 
 @router.get("/", response_class=HTMLResponse)
+# -----------------------------------------------------------------------------
+# Ruta liviana: muestra controles sin leer el Data Lake.
+# -----------------------------------------------------------------------------
 def research_home(
     request: Request,
     year: int = Query(2026, ge=1970, le=9998),
@@ -110,6 +194,9 @@ def research_home(
 
 
 @router.get("/analyze", response_class=HTMLResponse)
+# -----------------------------------------------------------------------------
+# Ruta orquestadora: ejecuta el pipeline Research y prepara la respuesta visual.
+# -----------------------------------------------------------------------------
 def research_analyze(
     request: Request,
     year: int = Query(..., ge=1970, le=9998),

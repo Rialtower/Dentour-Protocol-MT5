@@ -2,6 +2,43 @@
 
 Calcula referencias simples que cualquier modelo debe superar fuera de muestra.
 No entrena modelos, no consulta archivos y no escribe resultados.
+
+GUÍA DIDÁCTICA AMPLIADA
+========================
+
+PROPÓSITO
+---------
+Los baselines son referencias estadísticas simples. Un modelo experimental no
+demuestra valor por producir probabilidades; debe compararse con una estrategia
+mucho más sencilla calculada únicamente con datos anteriores.
+
+REFERENCIAS DESCRIPTIVAS
+------------------------
+- Frecuencia global.
+- Frecuencia por sesión.
+- Frecuencia por minuto de sesión.
+- Frecuencia por día de semana.
+- Frecuencia por régimen ATR.
+
+PREDICCIÓN CONSTANTE
+--------------------
+build_constant_predictions aprende la frecuencia del target en train y aplica
+esa probabilidad a observaciones posteriores. Si se agrupa, calcula frecuencias
+por grupo y puede usar la frecuencia global como fallback para grupos ausentes.
+Nunca lee el target de inference_data para construir la probabilidad.
+
+RÉGIMEN DE VOLATILIDAD
+----------------------
+Los cortes q33 y q67 deben ajustarse con train y aplicarse sin recalcular en
+test. Cuando reference_data no se proporciona, el resultado es descriptivo y
+no debe interpretarse como evaluación fuera de muestra.
+
+LIMITACIÓN
+----------
+El reporte descriptivo construye constant_predictions usando el mismo dataset
+como train e inference. Esa salida sirve para inspección, no para evaluación.
+La evaluación real debe llamar build_constant_predictions con train y test
+separados por validation.py.
 """
 
 from __future__ import annotations
@@ -32,6 +69,9 @@ WEEKDAY_LABELS: Final[dict[int, str]] = {
 
 
 @dataclass(frozen=True, slots=True)
+# -----------------------------------------------------------------------------
+# Agrupa todas las referencias descriptivas y predicciones constantes.
+# -----------------------------------------------------------------------------
 class BaselineReport:
     rows: int
     session_codes: tuple[str, ...]
@@ -44,6 +84,9 @@ class BaselineReport:
     constant_predictions: pl.DataFrame
 
 
+# -----------------------------------------------------------------------------
+# Exige targets existentes y limitados a 0/1.
+# -----------------------------------------------------------------------------
 def _validate_binary_targets(
     dataframe: pl.DataFrame,
     targets: tuple[str, ...],
@@ -60,6 +103,9 @@ def _validate_binary_targets(
             )
 
 
+# -----------------------------------------------------------------------------
+# Genera expresiones Polars reutilizables para frecuencias.
+# -----------------------------------------------------------------------------
 def _rate_expressions(
     targets: Iterable[str],
 ) -> list[pl.Expr]:
@@ -69,6 +115,9 @@ def _rate_expressions(
     ]
 
 
+# -----------------------------------------------------------------------------
+# Genera conteos positivos para auditar las tasas.
+# -----------------------------------------------------------------------------
 def _count_positive_expressions(
     targets: Iterable[str],
 ) -> list[pl.Expr]:
@@ -78,6 +127,9 @@ def _count_positive_expressions(
     ]
 
 
+# -----------------------------------------------------------------------------
+# Resume la frecuencia histórica total y medianas de excursión.
+# -----------------------------------------------------------------------------
 def calculate_global_rates(
     dataset: ResearchDataset,
     *,
@@ -98,6 +150,9 @@ def calculate_global_rates(
     )
 
 
+# -----------------------------------------------------------------------------
+# Separa referencias para evitar que una sesión oculte a otra.
+# -----------------------------------------------------------------------------
 def calculate_by_session(
     dataset: ResearchDataset,
     *,
@@ -123,6 +178,9 @@ def calculate_by_session(
     )
 
 
+# -----------------------------------------------------------------------------
+# Estudia cómo cambia la frecuencia dentro de la sesión.
+# -----------------------------------------------------------------------------
 def calculate_by_session_minute(
     dataset: ResearchDataset,
     *,
@@ -149,6 +207,9 @@ def calculate_by_session_minute(
     )
 
 
+# -----------------------------------------------------------------------------
+# Agrupa por día ISO y agrega una etiqueta legible.
+# -----------------------------------------------------------------------------
 def calculate_by_weekday(
     dataset: ResearchDataset,
     *,
@@ -179,6 +240,9 @@ def calculate_by_weekday(
     )
 
 
+# -----------------------------------------------------------------------------
+# Ajusta terciles ATR exclusivamente con datos de referencia.
+# -----------------------------------------------------------------------------
 def _fit_atr_regime_thresholds(
     reference_data: pl.DataFrame,
 ) -> tuple[float, float]:
@@ -201,6 +265,9 @@ def _fit_atr_regime_thresholds(
     return q33, q67
 
 
+# -----------------------------------------------------------------------------
+# Aplica cortes ya aprendidos sin recalcularlos en inference.
+# -----------------------------------------------------------------------------
 def add_atr_regime(
     dataframe: pl.DataFrame,
     *,
@@ -219,6 +286,9 @@ def add_atr_regime(
     )
 
 
+# -----------------------------------------------------------------------------
+# Resume resultados dentro de volatilidad baja, media y alta.
+# -----------------------------------------------------------------------------
 def calculate_by_volatility_regime(
     dataset: ResearchDataset,
     *,
@@ -253,6 +323,9 @@ def calculate_by_volatility_regime(
     )
 
 
+# -----------------------------------------------------------------------------
+# Aprende frecuencias en train y las aplica a filas posteriores.
+# -----------------------------------------------------------------------------
 def build_constant_predictions(
     train_data: pl.DataFrame,
     inference_data: pl.DataFrame,
@@ -334,6 +407,9 @@ def build_constant_predictions(
     )
 
 
+# -----------------------------------------------------------------------------
+# Orquesta todas las referencias descriptivas del dataset.
+# -----------------------------------------------------------------------------
 def build_baseline_report(
     dataset: ResearchDataset,
     *,

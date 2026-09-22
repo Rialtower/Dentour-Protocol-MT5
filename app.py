@@ -1,4 +1,5 @@
-"""Dashboard MT5 version 0.2, edición didáctica.
+"""
+Dashboard MT5 version 0.2, edición didáctica.
 
 Este archivo conserva la lógica de app.py y añade comentarios para estudio.
 Arquitectura resumida:
@@ -10,6 +11,68 @@ Arquitectura resumida:
 6. ingest.py es la frontera con MetaTrader 5; app.py no llama directamente a la API MetaTrader5.
 
 Nota: los comentarios explican tanto la intención como supuestos y riesgos.
+
+GUÍA DIDÁCTICA AMPLIADA
+========================
+
+RESPONSABILIDAD DEL ARCHIVO
+---------------------------
+Este archivo contiene la instancia FastAPI principal y el dashboard diario de
+DPMT5. La ruta web recibe una fecha, temporalidad y sesión; después consulta
+Parquet con DuckDB, transforma datos con Polars, prepara tablas pequeñas con
+Pandas y genera una figura interactiva con Plotly.
+
+FLUJO PRINCIPAL
+---------------
+1. El navegador envía formularios a FastAPI.
+2. app.py valida fecha, temporalidad y sesión.
+3. DuckDB consulta únicamente las particiones diarias necesarias.
+4. Polars calcula VWAP, ticks firmados, CVD y matriz multitemporal.
+5. Pandas se utiliza únicamente para resultados tabulares pequeños.
+6. Plotly genera el gráfico de precio, CVD y confluencia.
+7. FastAPI devuelve una respuesta HTML.
+
+FRONTERAS ARQUITECTÓNICAS
+-------------------------
+- app.py no descarga datos desde MetaTrader 5 directamente.
+- ingest.py es la única frontera con el terminal MT5.
+- War Room y Research se integran mediante APIRouter.
+- El Data Lake es la fuente histórica de verdad.
+- Las consultas usan intervalos semiabiertos [inicio, fin).
+
+LECTURA RECOMENDADA
+-------------------
+El archivo puede estudiarse en este orden:
+1. Imports, configuración y FastAPI.
+2. Contrato de sesiones.
+3. Conexión y consultas DuckDB.
+4. Transformaciones Polars.
+5. Cálculos de análisis diario.
+6. Construcción Plotly.
+7. Render HTML.
+8. Rutas HTTP.
+9. Función orquestadora analizar().
+
+DEUDA TÉCNICA DOCUMENTADA
+-------------------------
+- FastAPI aparece importado dos veces. Es redundante, aunque no cambia el
+  comportamiento.
+- Este archivo conserva una implementación local de SessionWindow y presets.
+  La arquitectura actual dispone de sessions.py como contrato compartido. Una
+  refactorización posterior debe importar ese contrato en lugar de duplicarlo.
+- El HTML y CSS están embebidos en Python. A medida que la interfaz crezca,
+  conviene migrarlos a plantillas Jinja2 y archivos static/css y static/js.
+- Algunas funciones analíticas mezclan cálculo, presentación y nombres de
+  columnas. La documentación conserva la versión actual sin refactorizarla.
+
+SEGURIDAD Y CORRECCIÓN
+----------------------
+- Los valores insertados manualmente en HTML deben escaparse.
+- Las consultas SQL deben conservar parámetros ?.
+- Las conexiones DuckDB deben cerrarse mediante finally.
+- join_asof requiere ambos lados ordenados.
+- Los rangos Plotly deben derivarse de la sesión seleccionada.
+- Los errores se registran con logger.exception para conservar traceback.
 """
 
 # seccion de imports liberias de mt5, duckBD,pandas,polars,Fastapi y rutas -------------
@@ -516,11 +579,27 @@ def tabla_zonas(dia: date, sesion: SessionWindow) -> str:
         (broker.utcoffset().total_seconds() - referencia_cot.utcoffset().total_seconds()) / 3600
     )
     verano = broker.dst() is not None and broker.dst().total_seconds() != 0
-    return f"""<div class='tz'><h3>Contraste horario de la sesión seleccionada</h3><table><thead><tr>
-<th>Sesión</th><th>Hora servidor MT5 (EET/EEST)</th><th>Hora Colombia (COT)</th><th>Diferencial</th>
-</tr></thead><tbody><tr><td>{html.escape(sesion.label)}</td><td>{broker:%Y-%m-%d %H:%M:%S %Z}</td>
-<td>{referencia_cot:%Y-%m-%d %H:%M:%S %Z}</td><td>{'Verano' if verano else 'Invierno'}: +{diferencia} horas</td>
-</tr></tbody></table></div>"""
+    return f"""<div class='tz'>
+    <h3>Contraste horario de la sesión seleccionada</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Sesión</th>
+                <th>Hora servidor MT5 (EET/EEST)</th>
+                <th>Hora Colombia (COT)</th>
+                <th>Diferencial</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>{html.escape(sesion.label)}</td>
+                <td>{broker:%Y-%m-%d %H:%M:%S %Z}</td>
+                <td>{referencia_cot:%Y-%m-%d %H:%M:%S %Z}</td>
+                <td>{'Verano' if verano else 'Invierno'}: +{diferencia} horas</td>
+            </tr>
+        </tbody>
+    </table>
+</div>"""
 
 
 # Convierte un DataFrame Pandas en una tarjeta HTML. El título se escapa; el cuerpo proviene de datos calculados internamente.
@@ -571,14 +650,23 @@ def render(
     <link rel="icon" type="image/x-icon" href="/static/favicon.ico?v=2">
 
     <style>
+        :root {{
+            --bg: #09090b;
+            --panel: #18181b;
+            --border: #27272a;
+            --text: #e4e4e7;
+            --text-dim: #a1a1aa;
+            --text-faint: #71717a;
+        }}
+
         * {{
             box-sizing: border-box;
         }}
 
         body {{
-            background: #0a0a0a;
-            color: #ededed;
-            font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            font-family: system-ui, -apple-system, sans-serif;
             margin: 24px;
             line-height: 1.5;
         }}
@@ -593,15 +681,15 @@ def render(
             display: flex;
             flex-direction: column;
             gap: 16px;
-            background: #111111;
+            background: var(--panel);
             padding: 18px;
-            border: 1px solid #30363d;
+            border: 1px solid var(--border);
             border-radius: 6px;
         }}
 
         .panel {{
-            background: #0d1117;
-            border: 1px solid #21262d;
+            background: var(--panel);
+            border: 1px solid var(--border);
             border-radius: 6px;
             padding: 14px 16px;
         }}
@@ -612,7 +700,7 @@ def render(
             font-weight: 600;
             letter-spacing: .05em;
             text-transform: uppercase;
-            color: #6e7681;
+            color: var(--text-faint);
         }}
 
         .field-row {{
@@ -647,14 +735,14 @@ def render(
             display: grid;
             gap: 6px;
             font-size: 13px;
-            color: #a1a1aa;
+            color: var(--text-dim);
         }}
 
         input,
         select {{
             background: #000000;
-            color: #ededed;
-            border: 1px solid #30363d;
+            color: var(--text);
+            border: 1px solid var(--border);
             padding: 9px 12px;
             border-radius: 6px;
             font-family: inherit;
@@ -664,19 +752,19 @@ def render(
 
         input:hover,
         select:hover {{
-            border-color: #484f58;
+            border-color: #3f3f46;
         }}
 
         input:focus,
         select:focus {{
             outline: none;
-            border-color: #58a6ff;
+            border-color: #3b82f6;
         }}
 
         button {{
-            background: #161b22;
-            color: #ededed;
-            border: 1px solid #30363d;
+            background: #27272a;
+            color: var(--text);
+            border: 1px solid var(--border);
             padding: 9px 16px;
             border-radius: 6px;
             font-family: inherit;
@@ -686,27 +774,27 @@ def render(
         }}
 
         button:hover {{
-            background: #1c2128;
-            border-color: #484f58;
+            background: #3f3f46;
+            border-color: #52525b;
         }}
 
         .primary {{
-            background: #238636;
-            border-color: #2ea043;
+            background: #16a34a;
+            border-color: #22c55e;
         }}
 
         .primary:hover {{
-            background: #2ea043;
-            border-color: #3fb950;
+            background: #22c55e;
+            border-color: #4ade80;
         }}
 
         .msg {{
             margin: 16px 0;
             padding: 12px 14px;
-            border: 1px solid #d29922;
+            border: 1px solid #b45309;
             border-radius: 6px;
-            background: #111111;
-            color: #ededed;
+            background: var(--panel);
+            color: var(--text);
             font-size: 14px;
         }}
 
@@ -718,29 +806,34 @@ def render(
 
         th,
         td {{
-            border: 1px solid #30363d;
+            border: 1px solid var(--border);
             padding: 9px 10px;
             text-align: left;
         }}
 
         th {{
-            color: #a1a1aa;
+            color: var(--text-dim);
             font-weight: 600;
-            background: #0a0a0a;
+            background: var(--bg);
         }}
 
         td {{
-            color: #ededed;
+            color: var(--text);
         }}
 
         .tz,
         .card {{
             margin-top: 16px;
-            background: #111111;
+            background: var(--panel);
             padding: 16px;
-            border: 1px solid #30363d;
+            border: 1px solid var(--border);
             border-radius: 6px;
             box-shadow: 0 1px 2px rgba(0, 0, 0, .4);
+        }}
+
+        .card {{
+            background: rgba(6, 78, 59, 0.35);
+            border-color: rgba(16, 185, 129, 0.30);
         }}
 
         .tz h3,
@@ -748,13 +841,17 @@ def render(
             margin: 0 0 12px;
             font-size: 14px;
             font-weight: 600;
-            color: #a1a1aa;
+            color: var(--text-dim);
             text-transform: uppercase;
             letter-spacing: .03em;
         }}
 
         .svg-container {{
             margin-top: 16px;
+            background: rgba(23, 37, 84, 0.30);
+            border: 1px solid rgba(59, 130, 246, 0.25);
+            border-radius: 6px;
+            padding: 12px;
         }}
 
         .cards {{
@@ -772,11 +869,11 @@ def render(
             min-height: 36px;
             padding: 0 13px;
 
-            color: #c9d1d9;
+            color: var(--text);
             text-decoration: none;
 
-            background: #21262d;
-            border: 1px solid #30363d;
+            background: #27272a;
+            border: 1px solid var(--border);
             border-radius: 5px;
 
             box-sizing: border-box;
@@ -784,20 +881,20 @@ def render(
         }}
 
         .module-link:hover {{
-            background: #30363d;
+            background: #3f3f46;
         }}
 
         .module-link.war-room {{
-            border-color: #388bfd;
+            border-color: #3b82f6;
         }}
 
         .module-link.research {{
-            background: #6e40c9;
-            border-color: #8957e5;
+            background: #6d28d9;
+            border-color: #8b5cf6;
         }}
 
         .module-link.research:hover {{
-            background: #8957e5;
+            background: #7c3aed;
         }}
 
         .session-panel {{
@@ -805,7 +902,7 @@ def render(
             display: grid;
             gap: 10px;
             padding-top: 14px;
-            border-top: 1px solid #21262d;
+            border-top: 1px solid var(--border);
         }}
 
         .session-title {{
@@ -813,11 +910,11 @@ def render(
             font-weight: 600;
             letter-spacing: .05em;
             text-transform: uppercase;
-            color: #6e7681;
+            color: var(--text-faint);
         }}
 
         .session-buttons {{ display: flex; gap: 8px; flex-wrap: wrap; }}
-        .session-button.active {{ background: #1f6feb; border-color: #58a6ff; }}
+        .session-button.active {{ background: #2563eb; border-color: #3b82f6; }}
         .session-times {{ display: flex; gap: 10px; flex-wrap: wrap; }}
 
         .topbar {{
@@ -826,8 +923,8 @@ def render(
             z-index: 100;
             margin: -24px -24px 20px -24px;
             padding: 16px 24px;
-            background: #0a0a0a;
-            border-bottom: 1px solid #30363d;
+            background: var(--bg);
+            border-bottom: 1px solid var(--border);
         }}
 
         .topbar h2 {{
@@ -835,12 +932,22 @@ def render(
             letter-spacing: -.01em;
             margin: 0;
         }}
+
+        .panel-ingesta {{
+            background: rgba(69, 26, 3, 0.40);
+            border-color: rgba(217, 119, 6, 0.35);
+        }}
+
+        .panel-analysis {{
+            background: rgba(23, 37, 84, 0.40);
+            border-color: rgba(59, 130, 246, 0.30);
+        }}
     </style>
 </head>
 
 <body>
     <div class="topbar">
-        <h2>Dentour Protocol MT5 Alpha version</h2>
+        <h2>Dentour Protocol MT5 [Beta version v1.0]</h2>
     </div>
 
     <div class="control-panel">

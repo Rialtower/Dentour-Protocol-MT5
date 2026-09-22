@@ -1,4 +1,5 @@
-"""Pipeline MT5 -> Parquet para un día operativo de Colombia, edición didáctica.
+"""
+Pipeline MT5 -> Parquet para un día operativo de Colombia, edición didáctica.
 
 Flujo general:
 1. Interpreta el día en America/Bogota y lo convierte al intervalo UTC [inicio, fin).
@@ -12,6 +13,72 @@ Flujo general:
 9. Cierra MT5 y libera todos los locks incluso cuando ocurre un error.
 
 Esta versión conserva la lógica ejecutable del archivo original y añade comentarios de estudio.
+
+GUÍA DIDÁCTICA AMPLIADA
+========================
+
+RESPONSABILIDAD DEL ARCHIVO
+---------------------------
+ingest.py es la única frontera entre DPMT5 y el terminal MetaTrader 5. Convierte
+un día operativo colombiano en límites UTC, descarga barras o ticks, normaliza
+los datos, impone esquemas Arrow, escribe Parquet ZSTD de forma atómica y audita
+el archivo resultante.
+
+FLUJO PRINCIPAL
+---------------
+1. Validar tipos y fecha solicitados.
+2. Adquirir lock interno y lock de archivo.
+3. Convertir el día COT a [inicio_utc, fin_utc).
+4. Inicializar MetaTrader 5 y seleccionar el símbolo.
+5. Descargar M1, M15, H1 y/o ticks.
+6. Normalizar arrays estructurados con Pandas.
+7. Aplicar de nuevo el filtro semiabierto para proteger fronteras.
+8. Convertir a PyArrow con esquema explícito.
+9. Escribir un archivo temporal comprimido con ZSTD.
+10. Reemplazar atómicamente el destino.
+11. Reabrir y auditar filas, esquema, codec y estadísticas.
+12. Cerrar MT5 y liberar locks en finally.
+
+CONTRATOS IMPORTANTES
+---------------------
+- Almacenamiento temporal en UTC.
+- Calendario de selección en America/Bogota.
+- Particiones Hive tipo/year=YYYY/month=MM/day=DD.
+- Archivos deterministas por símbolo, tipo y fecha.
+- Barras y ticks no pueden contener nulos según el esquema Arrow.
+- Bid y ask no se inventan si están ausentes.
+- El final del rango siempre es exclusivo.
+
+LECTURA RECOMENDADA
+-------------------
+1. Constantes y esquemas Arrow.
+2. Conversión temporal COT a UTC.
+3. Inicialización MT5.
+4. Normalización de barras y ticks.
+5. Construcción de rutas.
+6. Escritura atómica y auditoría.
+7. Orquestación y locks.
+8. Interfaz de línea de comandos.
+
+DEUDA TÉCNICA DOCUMENTADA
+-------------------------
+- En la versión recibida, ejecutar_pipeline normaliza el mismo lote dos veces:
+  existe una asignación compacta y otra asignación multilinea inmediatamente
+  después. El resultado funcional suele ser el mismo, pero duplica cómputo.
+  Esta copia comentada conserva el comportamiento original para que el ejercicio
+  sea documental. El refactor correcto debe eliminar una de las dos asignaciones.
+- El filtro [inicio, fin) aplicado después de normalizar es correcto y debe
+  conservarse para evitar fronteras repetidas entre particiones diarias.
+- La auditoría comprueba metadatos Parquet, pero una futura ampliación puede
+  verificar también orden, unicidad temporal y consistencia OHLC.
+
+SEGURIDAD OPERATIVA
+-------------------
+- Nunca publicar credenciales MT5.
+- No retirar finally de shutdown o liberación de locks.
+- No reemplazar os.replace por una escritura directa al destino.
+- No convertir timestamps ingenuos sin zona.
+- No rellenar bid y ask faltantes con valores fabricados.
 """
 # Pospone la evaluación de anotaciones de tipo y facilita usar sintaxis moderna sin resolver todos los tipos al importar.
 from __future__ import annotations

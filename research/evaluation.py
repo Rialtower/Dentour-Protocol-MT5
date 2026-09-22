@@ -8,6 +8,40 @@ Responsabilidades:
 - Comparar modelo contra baseline sin entrenar ni modificar artefactos.
 
 Este modulo no consulta archivos, no entrena modelos y no escribe resultados.
+
+GUÍA DIDÁCTICA AMPLIADA
+========================
+
+PROPÓSITO
+---------
+Este módulo califica probabilidades ya generadas. No entrena, no ajusta C, no
+consulta Parquet y no modifica modelos. Compara modelo y baseline sobre los
+mismos observation_id del bloque test.
+
+MÉTRICAS PROBABILÍSTICAS
+------------------------
+- Brier score: error cuadrático medio de la probabilidad. Menor es mejor.
+- Log loss: penaliza especialmente probabilidades seguras e incorrectas.
+- Average Precision: resume precision-recall a través de umbrales.
+- ROC-AUC: capacidad de ranking cuando existen ambas clases.
+
+MÉTRICAS BINARIAS
+-----------------
+Precision, recall, F1 y matriz de confusión requieren convertir probabilidades
+a clases mediante un umbral. El umbral predeterminado 0.50 es descriptivo, no
+una regla operativa. El test final no debe usarse para escoger el mejor umbral.
+
+CALIBRACIÓN
+-----------
+Agrupa probabilidades en intervalos y compara la probabilidad media estimada
+contra la frecuencia observada. Pocos datos por bin producen estimaciones
+inestables; por eso las tablas deben interpretarse junto con observations.
+
+COMPARACIÓN JUSTA
+-----------------
+join_prediction_sources exige una unión 1:1 y el mismo número de filas. Esto
+impide comparar un modelo sobre observaciones favorables con un baseline sobre
+otro conjunto distinto.
 """
 
 from __future__ import annotations
@@ -41,6 +75,9 @@ DEFAULT_DECISION_THRESHOLDS: Final[tuple[float, ...]] = (
 
 
 @dataclass(frozen=True, slots=True)
+# -----------------------------------------------------------------------------
+# Resultado inmutable de evaluar una fuente de probabilidades.
+# -----------------------------------------------------------------------------
 class ProbabilityMetrics:
     """Metricas de una fuente de probabilidades sobre un mismo target."""
 
@@ -64,6 +101,9 @@ class ProbabilityMetrics:
 
 
 @dataclass(frozen=True, slots=True)
+# -----------------------------------------------------------------------------
+# Agrupa comparación, calibración, sesiones, umbrales y predicciones unidas.
+# -----------------------------------------------------------------------------
 class EvaluationReport:
     """Resultado completo de comparar modelo y baseline."""
 
@@ -77,6 +117,9 @@ class EvaluationReport:
     joined_predictions: pl.DataFrame
 
 
+# -----------------------------------------------------------------------------
+# Valida rango [0,1], finitud, IDs únicos y target binario.
+# -----------------------------------------------------------------------------
 def _validate_probability_frame(
     dataframe: pl.DataFrame,
     *,
@@ -126,6 +169,9 @@ def _validate_probability_frame(
         raise ValueError(f"{source}: actual_target contiene nulos.")
 
 
+# -----------------------------------------------------------------------------
+# Evita calcular AP y ROC-AUC cuando test contiene una sola clase.
+# -----------------------------------------------------------------------------
 def _safe_ranking_metrics(
     actual: np.ndarray,
     probability: np.ndarray,
@@ -140,6 +186,9 @@ def _safe_ranking_metrics(
     )
 
 
+# -----------------------------------------------------------------------------
+# Calcula métricas probabilísticas y binarias para una fuente.
+# -----------------------------------------------------------------------------
 def calculate_probability_metrics(
     dataframe: pl.DataFrame,
     *,
@@ -197,6 +246,9 @@ def calculate_probability_metrics(
     )
 
 
+# -----------------------------------------------------------------------------
+# Convierte dataclasses pequeñas a una tabla Polars presentable.
+# -----------------------------------------------------------------------------
 def metrics_table(*metrics: ProbabilityMetrics) -> pl.DataFrame:
     """Convierte metricas a una tabla Polars pequena."""
 
@@ -226,6 +278,9 @@ def metrics_table(*metrics: ProbabilityMetrics) -> pl.DataFrame:
     )
 
 
+# -----------------------------------------------------------------------------
+# Agrupa probabilidades en bins iguales y mide error de calibración.
+# -----------------------------------------------------------------------------
 def build_calibration_table(
     dataframe: pl.DataFrame,
     *,
@@ -299,6 +354,9 @@ def build_calibration_table(
     return pl.DataFrame(rows).sort(["source", "bin"])
 
 
+# -----------------------------------------------------------------------------
+# Explora varios cortes sin declarar ninguno como umbral operativo.
+# -----------------------------------------------------------------------------
 def build_threshold_analysis(
     dataframe: pl.DataFrame,
     *,
@@ -350,6 +408,9 @@ def build_threshold_analysis(
     return pl.DataFrame(rows).sort("threshold")
 
 
+# -----------------------------------------------------------------------------
+# Detecta si el resultado global oculta degradación en una sesión.
+# -----------------------------------------------------------------------------
 def build_session_evaluation(
     dataframe: pl.DataFrame,
     *,
@@ -394,6 +455,9 @@ def build_session_evaluation(
     return pl.DataFrame(rows).sort(["session_code", "source"])
 
 
+# -----------------------------------------------------------------------------
+# Garantiza comparación 1:1 entre modelo y baseline.
+# -----------------------------------------------------------------------------
 def join_prediction_sources(
     model_predictions: pl.DataFrame,
     baseline_predictions: pl.DataFrame,
@@ -443,6 +507,9 @@ def join_prediction_sources(
     return joined.sort("observation_time_utc")
 
 
+# -----------------------------------------------------------------------------
+# Orquesta la evaluación final sobre el bloque test.
+# -----------------------------------------------------------------------------
 def evaluate_model_against_baseline(
     model_predictions: pl.DataFrame,
     baseline_predictions: pl.DataFrame,

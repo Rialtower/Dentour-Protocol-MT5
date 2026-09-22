@@ -9,6 +9,47 @@ Flujo:
 6. Devuelve observaciones listas para construir targets.
 
 No consulta archivos, no mira al futuro y no entrena modelos.
+
+GUÍA DIDÁCTICA AMPLIADA
+========================
+
+PROPÓSITO
+---------
+Este módulo transforma barras M15 y contexto H1 en variables disponibles al
+momento real de decisión. No consulta archivos y no utiliza trayectorias futuras.
+
+CAUSALIDAD TEMPORAL
+-------------------
+- timestamp_* representa la apertura original de la M15.
+- observation_time_* representa el cierre confirmado, apertura + 15 minutos.
+- H1 solo se expone 60 minutos después de su apertura.
+- Las referencias de volumen se desplazan una barra antes de calcular medias.
+- Los extremos previos usan shift(1), excluyendo la barra actual.
+
+ORDEN CRÍTICO
+-------------
+Las ventanas históricas se calculan sobre M15 completo antes de filtrar una
+sesión. Así ATR, retornos y volumen relativo aprovechan el historial anterior y
+no se reinician artificialmente en cada apertura de sesión. El VWAP de sesión,
+en cambio, sí se calcula después del filtro y se reinicia por session_date.
+
+FAMILIAS DE FEATURES
+--------------------
+1. Geometría de vela.
+2. Retornos y volatilidad realizada.
+3. True Range y ATR.
+4. Volumen relativo y Z-score.
+5. VWAP diario.
+6. Extremos y sweeps previos.
+7. Variables temporales cíclicas.
+8. Último H1 totalmente cerrado.
+9. VWAP acumulativo de sesión.
+
+PERTENENCIA Y DISPONIBILIDAD
+----------------------------
+La apertura M15 determina si una barra pertenece a una sesión. El cierre
+confirmado determina minute_of_session. Por eso la M15 abierta en 07:00 pertenece
+a Nueva York y se convierte en una observación disponible a las 07:15.
 """
 
 from __future__ import annotations
@@ -45,6 +86,9 @@ BASE_BAR_COLUMNS: Final[tuple[str, ...]] = (
 
 
 @dataclass(frozen=True, slots=True)
+# -----------------------------------------------------------------------------
+# Contabilidad auditable de entrada, warmup, salida y columnas creadas.
+# -----------------------------------------------------------------------------
 class FeatureBuildReport:
     """Resumen de construcción de características de una sesión."""
 
@@ -60,11 +104,17 @@ class FeatureBuildReport:
 
 
 @dataclass(frozen=True, slots=True)
+# -----------------------------------------------------------------------------
+# Devuelve conjuntamente datos y reporte para targets.py.
+# -----------------------------------------------------------------------------
 class FeatureBuildResult:
     data: pl.DataFrame
     report: FeatureBuildReport
 
 
+# -----------------------------------------------------------------------------
+# Defensa de esquema, orden y unicidad antes de rolling windows.
+# -----------------------------------------------------------------------------
 def validate_bar_frame(dataframe: pl.DataFrame, *, frame_name: str) -> None:
     """Valida esquema, orden y unicidad de un DataFrame OHLCV."""
 
@@ -87,6 +137,9 @@ def validate_bar_frame(dataframe: pl.DataFrame, *, frame_name: str) -> None:
         )
 
 
+# -----------------------------------------------------------------------------
+# Separa apertura M15 de su instante real de disponibilidad.
+# -----------------------------------------------------------------------------
 def add_availability_columns(dataframe: pl.DataFrame) -> pl.DataFrame:
     """Conserva apertura M15 y agrega el instante real de disponibilidad."""
 
@@ -102,6 +155,9 @@ def add_availability_columns(dataframe: pl.DataFrame) -> pl.DataFrame:
     )
 
 
+# -----------------------------------------------------------------------------
+# Describe cuerpo, rango, mechas, ubicación del cierre y dirección.
+# -----------------------------------------------------------------------------
 def add_candle_geometry(dataframe: pl.DataFrame) -> pl.DataFrame:
     """Añade geometría conocida al cierre de cada M15."""
 
@@ -136,6 +192,9 @@ def add_candle_geometry(dataframe: pl.DataFrame) -> pl.DataFrame:
     )
 
 
+# -----------------------------------------------------------------------------
+# Crea retornos causales y volatilidad terminada en la barra actual.
+# -----------------------------------------------------------------------------
 def add_return_features(dataframe: pl.DataFrame) -> pl.DataFrame:
     """Añade retornos y volatilidad histórica terminados en la barra actual."""
 
@@ -166,6 +225,9 @@ def add_return_features(dataframe: pl.DataFrame) -> pl.DataFrame:
     )
 
 
+# -----------------------------------------------------------------------------
+# Calcula True Range y ATR sin mirar barras posteriores.
+# -----------------------------------------------------------------------------
 def add_atr_features(
     dataframe: pl.DataFrame,
     *,
@@ -204,6 +266,9 @@ def add_atr_features(
     )
 
 
+# -----------------------------------------------------------------------------
+# Compara volumen actual contra una referencia exclusivamente anterior.
+# -----------------------------------------------------------------------------
 def add_volume_features(
     dataframe: pl.DataFrame,
     *,
@@ -255,6 +320,9 @@ def add_volume_features(
     )
 
 
+# -----------------------------------------------------------------------------
+# Reinicia VWAP a medianoche del calendario COT.
+# -----------------------------------------------------------------------------
 def add_daily_vwap_features(dataframe: pl.DataFrame) -> pl.DataFrame:
     """Calcula VWAP causal desde las 00:00 COT de cada fecha."""
 
@@ -307,6 +375,9 @@ def add_daily_vwap_features(dataframe: pl.DataFrame) -> pl.DataFrame:
     )
 
 
+# -----------------------------------------------------------------------------
+# Usa shift(1) para excluir la barra actual de extremos previos.
+# -----------------------------------------------------------------------------
 def add_prior_extreme_features(
     dataframe: pl.DataFrame,
     *,
@@ -371,6 +442,9 @@ def add_prior_extreme_features(
     )
 
 
+# -----------------------------------------------------------------------------
+# Codifica hora cíclica y calendario sin imponer discontinuidad 23:59/00:00.
+# -----------------------------------------------------------------------------
 def add_time_features(dataframe: pl.DataFrame) -> pl.DataFrame:
     """Añade variables cíclicas del calendario COT."""
 
@@ -406,6 +480,9 @@ def add_time_features(dataframe: pl.DataFrame) -> pl.DataFrame:
     )
 
 
+# -----------------------------------------------------------------------------
+# Hace disponible una H1 solamente cuando la hora completa ya cerró.
+# -----------------------------------------------------------------------------
 def prepare_h1_context(h1: pl.DataFrame) -> pl.DataFrame:
     """Expone cada H1 únicamente 60 minutos después de su apertura."""
 
@@ -447,6 +524,9 @@ def prepare_h1_context(h1: pl.DataFrame) -> pl.DataFrame:
     )
 
 
+# -----------------------------------------------------------------------------
+# join_asof backward: asigna el último H1 disponible, nunca uno futuro.
+# -----------------------------------------------------------------------------
 def join_h1_context(
     m15_features: pl.DataFrame,
     h1_context: pl.DataFrame,
@@ -466,6 +546,9 @@ def join_h1_context(
     )
 
 
+# -----------------------------------------------------------------------------
+# Reinicia acumulados por session_code y session_date.
+# -----------------------------------------------------------------------------
 def add_session_vwap_features(
     session_frame: pl.DataFrame,
 ) -> pl.DataFrame:
@@ -530,6 +613,9 @@ def add_session_vwap_features(
         )
     )
 
+# -----------------------------------------------------------------------------
+# Filtra por apertura M15 y posiciona por cierre confirmado.
+# -----------------------------------------------------------------------------
 def filter_observations_for_session(
     dataframe: pl.DataFrame,
     session: SessionWindow,
@@ -634,6 +720,9 @@ def filter_observations_for_session(
         .sort("observation_time_utc")
     )
 
+# -----------------------------------------------------------------------------
+# Orquestador completo del pipeline causal de features.
+# -----------------------------------------------------------------------------
 def build_m15_feature_frame(
     m15: pl.DataFrame,
     h1: pl.DataFrame,

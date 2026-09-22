@@ -17,6 +17,46 @@ Este módulo no:
 - escribe resultados;
 - mantiene conexiones globales;
 - consulta ticks.
+
+GUÍA DIDÁCTICA AMPLIADA
+========================
+
+PROPÓSITO
+---------
+Este módulo es la frontera de lectura histórica de Research. Descubre Parquet,
+filtra con DuckDB, normaliza con Polars y devuelve M1, M15 y H1 ordenados. No
+calcula variables ni respuestas futuras.
+
+FLUJO
+-----
+1. Crear un periodo operativo COT semiabierto.
+2. Convertir sus límites a UTC.
+3. Enumerar fechas COT y localizar particiones Hive.
+4. Abrir una única conexión DuckDB.
+5. Leer columnas explícitas y filtrar UTC.
+6. Excluir fines de semana según timestamp convertido a COT.
+7. Normalizar tipos y conservar timestamp UTC/COT.
+8. Consolidar únicamente duplicados idénticos.
+9. Rechazar duplicados conflictivos y barras inválidas.
+10. Entregar DataFrames Polars y métricas operativas.
+
+DUPLICADOS
+----------
+Un timestamp puede aparecer en particiones vecinas por una frontera inclusiva
+de la API MT5. Si todas las versiones OHLCV son idénticas, se conserva una. Si
+existen valores distintos para el mismo timestamp, el módulo falla porque no
+puede decidir cuál versión representa la verdad.
+
+MEMORIA
+-------
+DuckDB selecciona columnas y filtra antes de transferir a Polars. La conexión
+se comparte para M1, M15 y H1 y se cierra en finally. Este módulo no consulta
+ticks, evitando transferencias masivas innecesarias.
+
+CONTRATO TEMPORAL
+-----------------
+Las particiones se descubren por fecha COT, porque ingest.py particiona por día
+operativo. El filtro definitivo siempre utiliza timestamps UTC [inicio, fin).
 """
 
 from __future__ import annotations
@@ -85,6 +125,9 @@ SUPPORTED_TIMEFRAMES: Final[tuple[Timeframe, ...]] = (
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True, slots=True)
+# -----------------------------------------------------------------------------
+# Representa simultáneamente el calendario COT y sus límites absolutos UTC.
+# -----------------------------------------------------------------------------
 class ResearchPeriod:
     """Intervalo histórico semiabierto expresado en COT y UTC.
 
@@ -141,6 +184,9 @@ class ResearchPeriod:
 
 
 @dataclass(frozen=True, slots=True)
+# -----------------------------------------------------------------------------
+# Agrupa las rutas descubiertas y permite medir cantidad y bytes.
+# -----------------------------------------------------------------------------
 class TimeframeFiles:
     """Archivos encontrados para una temporalidad."""
 
@@ -165,6 +211,9 @@ class TimeframeFiles:
 
 
 @dataclass(frozen=True, slots=True)
+# -----------------------------------------------------------------------------
+# Registra cobertura y costo de una consulta histórica.
+# -----------------------------------------------------------------------------
 class QueryMetrics:
     """Métricas operativas de una consulta histórica."""
 
@@ -178,6 +227,9 @@ class QueryMetrics:
 
 
 @dataclass(frozen=True, slots=True)
+# -----------------------------------------------------------------------------
+# Asocia un DataFrame normalizado con sus métricas de lectura.
+# -----------------------------------------------------------------------------
 class HistoricalBars:
     """Resultado de consultar una temporalidad."""
 
@@ -187,6 +239,9 @@ class HistoricalBars:
 
 
 @dataclass(frozen=True, slots=True)
+# -----------------------------------------------------------------------------
+# Contenedor M1/M15/H1 utilizado por el pipeline Research.
+# -----------------------------------------------------------------------------
 class HistoricalContext:
     """Conjunto histórico necesario para construir el dataset Research."""
 
@@ -218,6 +273,9 @@ class HistoricalContext:
 # Creación y validación del periodo histórico
 # ---------------------------------------------------------------------------
 
+# -----------------------------------------------------------------------------
+# Construye [inicio, fin) desde fechas operativas COT.
+# -----------------------------------------------------------------------------
 def create_research_period(
     start_date_cot: date,
     end_date_cot: date,
@@ -282,6 +340,9 @@ def create_research_period(
     )
 
 
+# -----------------------------------------------------------------------------
+# Convierte meses inclusivos en un final exclusivo del mes siguiente.
+# -----------------------------------------------------------------------------
 def create_closed_months_period(
     start_year: int,
     start_month: int,
@@ -395,6 +456,9 @@ def _next_month(
     )
 
 
+# -----------------------------------------------------------------------------
+# Generador O(días) que evita crear listas intermedias innecesarias.
+# -----------------------------------------------------------------------------
 def iter_dates(
     start_date: date,
     end_date: date,
@@ -411,6 +475,9 @@ def iter_dates(
 # Descubrimiento de archivos
 # ---------------------------------------------------------------------------
 
+# -----------------------------------------------------------------------------
+# Descubre únicamente particiones diarias del periodo solicitado.
+# -----------------------------------------------------------------------------
 def discover_timeframe_files(
     period: ResearchPeriod,
     timeframe: Timeframe,
@@ -488,6 +555,9 @@ def discover_timeframe_files(
     )
 
 
+# -----------------------------------------------------------------------------
+# Localiza todas las temporalidades declaradas en el experimento.
+# -----------------------------------------------------------------------------
 def discover_context_files(
     period: ResearchPeriod,
     *,
@@ -527,6 +597,9 @@ def _validate_timeframe(
 # Conexión DuckDB
 # ---------------------------------------------------------------------------
 
+# -----------------------------------------------------------------------------
+# Crea una conexión local y limita CPU, memoria y orden físico.
+# -----------------------------------------------------------------------------
 def open_connection(
     *,
     db_path: str = DB_PATH,
@@ -560,6 +633,9 @@ def open_connection(
 # Consulta de barras
 # ---------------------------------------------------------------------------
 
+# -----------------------------------------------------------------------------
+# Ejecuta SQL selectivo, normaliza, reconcilia y valida una temporalidad.
+# -----------------------------------------------------------------------------
 def query_bars(
     connection: duckdb.DuckDBPyConnection,
     period: ResearchPeriod,
@@ -735,6 +811,9 @@ def query_bars(
     )
 
 
+# -----------------------------------------------------------------------------
+# Impone UTC, crea representación COT y convierte tipos estrictamente.
+# -----------------------------------------------------------------------------
 def normalize_bars_frame(
     dataframe: pl.DataFrame,
     *,
@@ -841,6 +920,9 @@ def normalize_bars_frame(
     )
 
 
+# -----------------------------------------------------------------------------
+# Conserva un esquema estable incluso cuando no existen archivos o filas.
+# -----------------------------------------------------------------------------
 def empty_bars_frame(
     timezone_name: str,
 ) -> pl.DataFrame:
@@ -871,6 +953,9 @@ def empty_bars_frame(
 # Validación de resultados
 # ---------------------------------------------------------------------------
 
+# -----------------------------------------------------------------------------
+# Deduplica fronteras idénticas y rechaza versiones conflictivas.
+# -----------------------------------------------------------------------------
 def reconcile_duplicate_bars(
     dataframe: pl.DataFrame,
     *,
@@ -957,6 +1042,9 @@ def reconcile_duplicate_bars(
 
     return cleaned, removed_rows
 
+# -----------------------------------------------------------------------------
+# Audita nulos, OHLC, volumen, spread, unicidad y orden.
+# -----------------------------------------------------------------------------
 def validate_bars_frame(
     dataframe: pl.DataFrame,
     *,
@@ -1086,6 +1174,9 @@ def validate_bars_frame(
 # Carga de contexto completo
 # ---------------------------------------------------------------------------
 
+# -----------------------------------------------------------------------------
+# Abre una conexión, carga M1/M15/H1 y la cierra en finally.
+# -----------------------------------------------------------------------------
 def load_historical_context(
     period: ResearchPeriod,
     *,
@@ -1181,6 +1272,9 @@ def load_historical_context(
 # Utilidades operativas
 # ---------------------------------------------------------------------------
 
+# -----------------------------------------------------------------------------
+# Produce una tabla pequeña adecuada para HTML o consola.
+# -----------------------------------------------------------------------------
 def summarize_context(
     context: HistoricalContext,
 ) -> pl.DataFrame:
@@ -1212,6 +1306,9 @@ def summarize_context(
     return pl.DataFrame(rows)
 
 
+# -----------------------------------------------------------------------------
+# Suma la estimación de memoria de los tres DataFrames Polars.
+# -----------------------------------------------------------------------------
 def estimate_context_memory_bytes(
     context: HistoricalContext,
 ) -> int:

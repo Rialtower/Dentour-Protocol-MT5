@@ -1,19 +1,12 @@
-"""Objetivos futuros dinámicos por sesión para Research.
+"""Construcción comentada de objetivos futuros dinámicos por sesión.
 
-Responsabilidades:
-- Recibir observaciones M15 generadas por research.features.
-- Usar observation_time_utc/cot como instante real de decisión.
-- Medir los siguientes H minutos con barras M1.
-- Exigir que el horizonte completo permanezca dentro de la sesión.
-- Calcular MFE, MAE, MAE previa al máximo y tiempos de excursión.
-- Crear umbrales binarios ATR y etiqueta de triple barrera.
-- Excluir horizontes incompletos, gaps y casos ambiguos.
-
-No consulta archivos, no construye features, no entrena modelos y no escribe datos.
+Recibe observaciones M15 ya construidas por features.py y mide la trayectoria M1
+posterior. Los resultados son respuestas históricas, nunca variables de entrada.
+El horizonte es semiabierto [observation_time, observation_time + H).
 """
-
 from __future__ import annotations
 
+# Búsqueda binaria eficiente de límites dentro de timestamps M1 ordenados.
 from bisect import bisect_left
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -21,14 +14,8 @@ from typing import Final
 
 import numpy as np
 import polars as pl
-
-from research.contracts import (
-    DEFAULT_EXPERIMENT,
-    AmbiguousBarrierPolicy,
-    ExperimentConfig,
-)
+from research.contracts import DEFAULT_EXPERIMENT, AmbiguousBarrierPolicy, ExperimentConfig
 from sessions import SessionWindow
-
 
 M1_DURATION_MINUTES: Final[int] = 1
 PRIMARY_THRESHOLD_ATR: Final[float] = 0.75
@@ -37,8 +24,7 @@ TARGET_PREFIX: Final[str] = "target_peak_"
 
 @dataclass(frozen=True, slots=True)
 class TargetBuildReport:
-    """Resumen de construcción y exclusión de targets por sesión."""
-
+    """Contabilidad de filas aceptadas y excluidas durante la construcción."""
     session_code: str
     session_label: str
     input_observations: int
@@ -55,11 +41,13 @@ class TargetBuildReport:
 
 @dataclass(frozen=True, slots=True)
 class TargetBuildResult:
+    """DataFrame enriquecido y reporte asociado."""
     data: pl.DataFrame
     report: TargetBuildReport
 
 
 def _threshold_suffix(threshold: float) -> str:
+    """Convierte 0.75 en 075 para nombres de columna estables."""
     return f"{round(threshold * 100):03d}"
 
 
@@ -68,52 +56,29 @@ def _target_column(threshold: float) -> str:
 
 
 def _validate_observations(observations: pl.DataFrame) -> None:
-    """Valida el contrato producido por features.py."""
-
+    """Valida el contrato causal entregado por features.py."""
     required = {
-        "timestamp_utc",
-        "timestamp_cot",
-        "observation_time_utc",
-        "observation_time_cot",
-        "session_code",
-        "session_date",
-        "minute_of_session",
-        "close",
-        "atr",
+        "timestamp_utc", "timestamp_cot", "observation_time_utc",
+        "observation_time_cot", "session_code", "session_date",
+        "minute_of_session", "close", "atr",
     }
     missing = required - set(observations.columns)
     if missing:
-        raise ValueError(
-            "Las observaciones no contienen columnas requeridas: "
-            f"{sorted(missing)}"
-        )
+        raise ValueError(f"Las observaciones no contienen columnas requeridas: {sorted(missing)}")
     if observations.is_empty():
         raise ValueError("El DataFrame de observaciones está vacío.")
     if not observations["observation_time_utc"].is_sorted():
-        raise ValueError(
-            "Las observaciones deben estar ordenadas por observation_time_utc."
-        )
-
+        raise ValueError("Las observaciones deben estar ordenadas por observation_time_utc.")
     duplicates = observations.select(
         pl.col("observation_time_utc").is_duplicated().sum()
     ).item()
     if duplicates:
-        raise ValueError(
-            "Las observaciones contienen "
-            f"{duplicates} tiempos de decisión duplicados."
-        )
+        raise ValueError(f"Las observaciones contienen {duplicates} tiempos de decisión duplicados.")
 
 
 def _validate_m1(m1: pl.DataFrame) -> None:
-    """Valida la trayectoria M1 usada para medir el futuro."""
-
-    required = {
-        "timestamp_utc",
-        "timestamp_cot",
-        "high",
-        "low",
-        "close",
-    }
+    """Exige una trayectoria M1 ordenada, única y con high/low disponibles."""
+    required = {"timestamp_utc", "timestamp_cot", "high", "low", "close"}
     missing = required - set(m1.columns)
     if missing:
         raise ValueError(f"M1 no contiene columnas requeridas: {sorted(missing)}")
@@ -121,15 +86,13 @@ def _validate_m1(m1: pl.DataFrame) -> None:
         raise ValueError("El DataFrame M1 está vacío.")
     if not m1["timestamp_utc"].is_sorted():
         raise ValueError("M1 debe estar ordenado por timestamp_utc.")
-
-    duplicates = m1.select(
-        pl.col("timestamp_utc").is_duplicated().sum()
-    ).item()
+    duplicates = m1.select(pl.col("timestamp_utc").is_duplicated().sum()).item()
     if duplicates:
         raise ValueError(f"M1 contiene {duplicates} timestamps duplicados.")
 
 
 def _positive_finite(value: object) -> bool:
+    """Acepta únicamente números finitos estrictamente positivos."""
     if isinstance(value, bool):
         return False
     try:
@@ -140,34 +103,22 @@ def _positive_finite(value: object) -> bool:
 
 
 def _primary_threshold(config: ExperimentConfig) -> float:
+    """Prefiere 0.75 ATR; si no existe, usa el umbral central configurado."""
     if PRIMARY_THRESHOLD_ATR in config.peak_thresholds_atr:
         return PRIMARY_THRESHOLD_ATR
-    return config.peak_thresholds_atr[
-        len(config.peak_thresholds_atr) // 2
-    ]
+    return config.peak_thresholds_atr[len(config.peak_thresholds_atr) // 2]
 
 
-def _timestamps_are_consecutive_minutes(
-    timestamps: list[datetime],
-) -> bool:
+def _timestamps_are_consecutive_minutes(timestamps: list[datetime]) -> bool:
+    """Detecta gaps incluso cuando la cantidad de filas parece correcta."""
     one_minute = timedelta(minutes=1)
-    return all(
-        current - previous == one_minute
-        for previous, current in zip(timestamps, timestamps[1:])
-    )
+    return all(current - previous == one_minute for previous, current in zip(timestamps, timestamps[1:]))
 
 
-def _session_bounds_utc(
-    session: SessionWindow,
-    session_date: date,
-) -> tuple[datetime, datetime]:
-    """Convierte los límites locales de una sesión a UTC."""
-
+def _session_bounds_utc(session: SessionWindow, session_date: date) -> tuple[datetime, datetime]:
+    """Convierte el día lógico y horario local de sesión a límites UTC."""
     start_cot, end_cot = session.bounds(session_date)
-    return (
-        start_cot.astimezone(timezone.utc),
-        end_cot.astimezone(timezone.utc),
-    )
+    return start_cot.astimezone(timezone.utc), end_cot.astimezone(timezone.utc)
 
 
 def _resolve_triple_barrier(
@@ -180,14 +131,16 @@ def _resolve_triple_barrier(
     lower_threshold_atr: float,
     policy: AmbiguousBarrierPolicy,
 ) -> tuple[int | None, int | None, bool]:
-    """Devuelve etiqueta, índice del primer toque y ambigüedad."""
+    """Resuelve qué barrera fue tocada primero.
 
+    Retorna etiqueta (+1, -1, 0 o None), índice del toque y bandera de
+    ambigüedad. Si ambas barreras se tocan en la misma barra M1, OHLC no revela
+    el orden intrabarra.
+    """
     upper_price = reference_price + upper_threshold_atr * atr
     lower_price = reference_price - lower_threshold_atr * atr
-
     upper_hits = np.flatnonzero(highs >= upper_price)
     lower_hits = np.flatnonzero(lows <= lower_price)
-
     first_upper = int(upper_hits[0]) if upper_hits.size else None
     first_lower = int(lower_hits[0]) if lower_hits.size else None
 
@@ -207,9 +160,7 @@ def _resolve_triple_barrier(
     if policy is AmbiguousBarrierPolicy.CONSERVATIVE:
         return -1, first_lower, True
     if policy is AmbiguousBarrierPolicy.RESOLVE_WITH_TICKS:
-        raise ValueError(
-            "RESOLVE_WITH_TICKS requiere ticks y todavía no está implementado."
-        )
+        raise ValueError("RESOLVE_WITH_TICKS requiere ticks y todavía no está implementado.")
     raise ValueError(f"Política ambigua no soportada: {policy}")
 
 
@@ -221,12 +172,7 @@ def build_peak_targets(
     config: ExperimentConfig = DEFAULT_EXPERIMENT,
     drop_invalid_rows: bool = True,
 ) -> TargetBuildResult:
-    """Calcula targets futuros dentro de la sesión seleccionada.
-
-    La ventana M1 es [observation_time, observation_time + H). Una observación
-    se excluye si el final del horizonte supera el cierre de su sesión.
-    """
-
+    """Mide MFE, MAE, tiempos y barreras para cada observación."""
     _validate_observations(observations)
     _validate_m1(m1)
 
@@ -244,30 +190,22 @@ def build_peak_targets(
 
     ordered_observations = observations.sort("observation_time_utc")
     ordered_m1 = m1.sort("timestamp_utc")
-
     m1_timestamps = ordered_m1["timestamp_utc"].to_list()
     m1_highs = ordered_m1["high"].to_numpy().astype(np.float64, copy=False)
     m1_lows = ordered_m1["low"].to_numpy().astype(np.float64, copy=False)
 
     records: list[dict[str, object]] = []
-    horizon_outside_session_rows = 0
-    incomplete_horizon_rows = 0
-    gap_rows = 0
-    invalid_atr_rows = 0
-    ambiguous_rows = 0
+    horizon_outside_session_rows = incomplete_horizon_rows = gap_rows = 0
+    invalid_atr_rows = ambiguous_rows = 0
 
     for row in ordered_observations.iter_rows(named=True):
         observation_time = row["observation_time_utc"]
         horizon_end = observation_time + horizon_delta
         reference_price = float(row["close"])
         atr_value = row["atr"]
-        row_session_date = row["session_date"]
+        session_start_utc, session_end_utc = _session_bounds_utc(selected_session, row["session_date"])
 
-        session_start_utc, session_end_utc = _session_bounds_utc(
-            selected_session,
-            row_session_date,
-        )
-
+        # Se crea siempre un registro de auditoría, incluso para filas inválidas.
         record: dict[str, object] = {
             "target_horizon_end_utc": horizon_end,
             "session_start_utc": session_start_utc,
@@ -281,27 +219,25 @@ def build_peak_targets(
 
         if observation_time < session_start_utc or horizon_end > session_end_utc:
             horizon_outside_session_rows += 1
-            record["target_valid"] = False
-            record["target_horizon_inside_session"] = False
-            record["target_exclusion_reason"] = "horizon_outside_session"
+            record.update(target_valid=False, target_horizon_inside_session=False,
+                          target_exclusion_reason="horizon_outside_session")
             records.append(record)
             continue
 
         if not _positive_finite(atr_value):
             invalid_atr_rows += 1
-            record["target_valid"] = False
-            record["target_exclusion_reason"] = "invalid_atr"
+            record.update(target_valid=False, target_exclusion_reason="invalid_atr")
             records.append(record)
             continue
 
         atr = float(atr_value)
+        # bisect evita buscar linealmente el inicio y final para cada observación.
         start_index = bisect_left(m1_timestamps, observation_time)
         end_index = bisect_left(m1_timestamps, horizon_end)
 
         if start_index >= len(m1_timestamps):
             incomplete_horizon_rows += 1
-            record["target_valid"] = False
-            record["target_exclusion_reason"] = "incomplete_horizon"
+            record.update(target_valid=False, target_exclusion_reason="incomplete_horizon")
             records.append(record)
             continue
 
@@ -311,20 +247,16 @@ def build_peak_targets(
 
         if len(window_timestamps) != expected_m1_rows:
             incomplete_horizon_rows += 1
-            record["target_valid"] = False
-            record["target_exclusion_reason"] = "incomplete_horizon"
+            record.update(target_valid=False, target_exclusion_reason="incomplete_horizon")
             records.append(record)
             continue
 
         expected_last = horizon_end - timedelta(minutes=1)
-        if (
-            window_timestamps[0] != observation_time
+        if (window_timestamps[0] != observation_time
             or window_timestamps[-1] != expected_last
-            or not _timestamps_are_consecutive_minutes(window_timestamps)
-        ):
+            or not _timestamps_are_consecutive_minutes(window_timestamps)):
             gap_rows += 1
-            record["target_valid"] = False
-            record["target_exclusion_reason"] = "m1_gap"
+            record.update(target_valid=False, target_exclusion_reason="m1_gap")
             records.append(record)
             continue
 
@@ -332,113 +264,75 @@ def build_peak_targets(
         trough_index = int(np.argmin(lows))
         future_high = float(highs[peak_index])
         future_low = float(lows[trough_index])
-
         mfe = max(future_high - reference_price, 0.0)
         mae = max(reference_price - future_low, 0.0)
-        adverse_before_peak = max(
-            reference_price - float(np.min(lows[: peak_index + 1])),
-            0.0,
-        )
-
+        adverse_before_peak = max(reference_price - float(np.min(lows[: peak_index + 1])), 0.0)
         mfe_atr = mfe / atr
-        record.update(
-            {
-                "future_high": future_high,
-                "future_low": future_low,
-                "mfe_points": mfe,
-                "mae_points": mae,
-                "adverse_before_peak_points": adverse_before_peak,
-                "mfe_atr": mfe_atr,
-                "mae_atr": mae / atr,
-                "adverse_before_peak_atr": adverse_before_peak / atr,
-                "time_to_peak_minutes": peak_index + 1,
-                "time_to_trough_minutes": trough_index + 1,
-                "peak_timestamp_utc": window_timestamps[peak_index],
-                "trough_timestamp_utc": window_timestamps[trough_index],
-            }
-        )
+
+        record.update({
+            "future_high": future_high, "future_low": future_low,
+            "mfe_points": mfe, "mae_points": mae,
+            "adverse_before_peak_points": adverse_before_peak,
+            "mfe_atr": mfe_atr, "mae_atr": mae / atr,
+            "adverse_before_peak_atr": adverse_before_peak / atr,
+            # +1 convierte el índice cero en minutos transcurridos 1..H.
+            "time_to_peak_minutes": peak_index + 1,
+            "time_to_trough_minutes": trough_index + 1,
+            "peak_timestamp_utc": window_timestamps[peak_index],
+            "trough_timestamp_utc": window_timestamps[trough_index],
+        })
 
         for threshold in config.peak_thresholds_atr:
             record[_target_column(threshold)] = int(mfe_atr >= threshold)
 
         label, touch_index, ambiguous = _resolve_triple_barrier(
-            highs,
-            lows,
-            reference_price=reference_price,
-            atr=atr,
+            highs, lows, reference_price=reference_price, atr=atr,
             upper_threshold_atr=primary_threshold,
             lower_threshold_atr=config.adverse_barrier_atr,
             policy=config.ambiguous_barrier_policy,
         )
-        record.update(
-            {
-                "triple_barrier_label": label,
-                "triple_barrier_threshold_atr": primary_threshold,
-                "adverse_barrier_threshold_atr": config.adverse_barrier_atr,
-                "first_barrier_touch_minutes": (
-                    touch_index + 1 if touch_index is not None else None
-                ),
-                "target_ambiguous": ambiguous,
-            }
-        )
-
+        record.update({
+            "triple_barrier_label": label,
+            "triple_barrier_threshold_atr": primary_threshold,
+            "adverse_barrier_threshold_atr": config.adverse_barrier_atr,
+            "first_barrier_touch_minutes": touch_index + 1 if touch_index is not None else None,
+            "target_ambiguous": ambiguous,
+        })
         if ambiguous:
             ambiguous_rows += 1
         if label is None:
-            record["target_valid"] = False
-            record["target_exclusion_reason"] = "ambiguous_barrier"
-
+            record.update(target_valid=False, target_exclusion_reason="ambiguous_barrier")
         records.append(record)
 
     target_frame = pl.DataFrame(records)
-    targets = ordered_observations.with_columns(
-        pl.int_range(0, pl.len(), dtype=pl.UInt32).alias("_row_id")
-    ).join(
-        target_frame.with_columns(
-            pl.int_range(0, pl.len(), dtype=pl.UInt32).alias("_row_id")
-        ),
-        on="_row_id",
-        how="left",
-        validate="1:1",
-    ).drop("_row_id")
+    # _row_id conserva alineación exacta entre observaciones y registros.
+    targets = (
+        ordered_observations.with_columns(pl.int_range(0, pl.len(), dtype=pl.UInt32).alias("_row_id"))
+        .join(target_frame.with_columns(pl.int_range(0, pl.len(), dtype=pl.UInt32).alias("_row_id")),
+              on="_row_id", how="left", validate="1:1")
+        .drop("_row_id")
+    )
 
     target_columns = tuple(
         [_target_column(value) for value in config.peak_thresholds_atr]
-        + [
-            "mfe_atr",
-            "mae_atr",
-            "adverse_before_peak_atr",
-            "time_to_peak_minutes",
-            "triple_barrier_label",
-        ]
+        + ["mfe_atr", "mae_atr", "adverse_before_peak_atr",
+           "time_to_peak_minutes", "triple_barrier_label"]
     )
-
     if drop_invalid_rows:
         targets = targets.filter(pl.col("target_valid"))
 
-    first_observation = None
-    last_observation = None
+    first_observation = last_observation = None
     if not targets.is_empty():
         bounds = targets.select(
             pl.col("observation_time_utc").min().alias("first"),
             pl.col("observation_time_utc").max().alias("last"),
         ).row(0, named=True)
-        first_observation = bounds["first"]
-        last_observation = bounds["last"]
+        first_observation, last_observation = bounds["first"], bounds["last"]
 
     report = TargetBuildReport(
-        session_code=selected_session.code,
-        session_label=selected_session.label,
-        input_observations=observations.height,
-        output_observations=targets.height,
-        horizon_outside_session_rows=horizon_outside_session_rows,
-        incomplete_horizon_rows=incomplete_horizon_rows,
-        gap_rows=gap_rows,
-        invalid_atr_rows=invalid_atr_rows,
-        ambiguous_rows=ambiguous_rows,
-        first_observation_time=first_observation,
-        last_observation_time=last_observation,
-        target_columns=target_columns,
+        selected_session.code, selected_session.label, observations.height,
+        targets.height, horizon_outside_session_rows, incomplete_horizon_rows,
+        gap_rows, invalid_atr_rows, ambiguous_rows, first_observation,
+        last_observation, target_columns,
     )
-
-    return TargetBuildResult(data=targets, report=report)
+    return TargetBuildResult(targets, report)

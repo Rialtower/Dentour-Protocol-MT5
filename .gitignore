@@ -1,0 +1,102 @@
+# Entornos virtuales
+.venv/
+venv/
+env/
+ENV/
+
+# Variables y secretos
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+*.so
+.python-version
+
+# Herramientas Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data Lake y datos financieros
+data_lake/
+*.parquet
+*.arrow
+*.feather
+*.csv
+*.tsv
+
+# DuckDB y bases locales
+*.duckdb
+*.duckdb.wal
+*.db
+*.sqlite
+*.sqlite3
+
+# Modelos y artefactos experimentales
+model_registry/
+training_artifacts/
+artifacts/
+models_store/
+*.joblib
+*.pkl
+*.pickle
+*.onnx
+
+# Logs y archivos temporales
+logs/
+*.log
+*.tmp
+*.temp
+*.lock
+*.pid
+
+# Backups del proyecto
+backups/
+backup/
+*_backup.py
+*_before_*.py
+*_old.py
+*.bak
+
+# Resultados generados
+reports/
+outputs/
+results/
+plots/
+*.html.tmp
+
+# Configuración de editores
+.vscode/
+.idea/
+*.code-workspace
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# MetaTrader local
+MQL5/
+MetaTrader*/
+terminal_data/
+broker_data/
+
+# Archivos potencialmente sensibles
+credentials.*
+secrets.*
+account_info.*
+mt5_config.*

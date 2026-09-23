@@ -43,6 +43,8 @@ from zoneinfo import ZoneInfo
 import duckdb
 # Polars recibe resultados columnares y calcula cobertura.
 import polars as pl
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 # APIRouter permite integrar War Room sin crear otra aplicación FastAPI.
 from fastapi import APIRouter, Query
 # HTMLResponse devuelve la interfaz directamente al navegador.
@@ -134,6 +136,191 @@ class CoberturaMensual:
             * self.dias_con_datos
             / self.dias_laborables_calendario
         )
+
+
+@dataclass(frozen=True, slots=True)
+class AnalisisMensual:
+    """Resultados mensuales compactos listos para presentación."""
+
+    barras: pl.DataFrame
+    perfil: pl.DataFrame
+    diarios: pl.DataFrame
+    niveles: dict[str, float]
+    sweeps: pl.DataFrame
+
+
+def calcular_analisis_mensual(barras_m1: pl.DataFrame) -> AnalisisMensual:
+    """Calcula AVWAP, CVD proxy, perfil M1, ATR, expansión y sweeps.
+
+    El CVD es una aproximación por dirección de vela M1 y el perfil distribuye
+    el volumen de cada barra sobre su precio típico. No se cargan ticks del mes.
+    """
+    if barras_m1.is_empty():
+        vacio = pl.DataFrame()
+        return AnalisisMensual(vacio, vacio, vacio, {}, vacio)
+
+    barras = barras_m1.sort("timestamp")
+    tp = (pl.col("high") + pl.col("low") + pl.col("close")) / 3.0
+    volumen = pl.col("volume").cast(pl.Float64).fill_null(0.0)
+    direccion = (
+        pl.when(pl.col("close") > pl.col("open")).then(1.0)
+        .when(pl.col("close") < pl.col("open")).then(-1.0)
+        .otherwise(0.0)
+    )
+    barras = (
+        barras.with_columns(
+            precio_tipico=tp,
+            volumen_f=volumen,
+            delta_proxy=direccion * volumen,
+            fecha=pl.col("timestamp").dt.date(),
+        )
+        .with_columns(
+            volumen_acum=pl.col("volumen_f").cum_sum(),
+            pv_acum=(pl.col("precio_tipico") * pl.col("volumen_f")).cum_sum(),
+            cvd_proxy=pl.col("delta_proxy").cum_sum(),
+        )
+        .with_columns(
+            avwap=pl.when(pl.col("volumen_acum") > 0)
+            .then(pl.col("pv_acum") / pl.col("volumen_acum"))
+            .otherwise(pl.col("precio_tipico"))
+        )
+    )
+
+    minimo = float(barras["low"].min())
+    maximo = float(barras["high"].max())
+    rango = maximo - minimo
+    paso = max(rango / 120.0, 0.01)
+    perfil = (
+        barras.with_columns(
+            nivel=((pl.col("precio_tipico") / paso).round() * paso).alias("nivel")
+        )
+        .group_by("nivel")
+        .agg(pl.col("volumen_f").sum().alias("volumen"))
+        .sort("nivel")
+    )
+    poc = float(perfil.sort("volumen", descending=True)["nivel"][0])
+
+    diarios = (
+        barras.group_by("fecha")
+        .agg(
+            pl.col("open").first().alias("open"),
+            pl.col("high").max().alias("high"),
+            pl.col("low").min().alias("low"),
+            pl.col("close").last().alias("close"),
+            pl.col("volumen_f").sum().alias("volumen"),
+            pl.len().alias("barras"),
+        )
+        .sort("fecha")
+        .with_columns(pl.col("close").shift(1).alias("cierre_previo"))
+        .with_columns(
+            pl.max_horizontal(
+                pl.col("high") - pl.col("low"),
+                (pl.col("high") - pl.col("cierre_previo")).abs(),
+                (pl.col("low") - pl.col("cierre_previo")).abs(),
+            ).alias("tr")
+        )
+        .with_columns(
+            pl.col("tr").rolling_mean(window_size=14, min_samples=1).alias("atr14")
+        )
+        .with_columns(
+            ((pl.col("high") - pl.col("low")) / pl.col("atr14"))
+            .fill_nan(0.0)
+            .fill_null(0.0)
+            .alias("expansion_atr")
+        )
+    )
+
+    apertura = float(barras["open"][0])
+    cierre = float(barras["close"][-1])
+    niveles = {
+        "Apertura mensual": apertura,
+        "Máximo mensual": maximo,
+        "Mínimo mensual": minimo,
+        "Cierre mensual": cierre,
+        "POC proxy": poc,
+        "AVWAP final": float(barras["avwap"][-1]),
+    }
+
+    candidatos = (
+        diarios.with_columns(
+            pl.col("high").cum_max().shift(1).alias("maximo_previo"),
+            pl.col("low").cum_min().shift(1).alias("minimo_previo"),
+        )
+        .filter(
+            ((pl.col("high") > pl.col("maximo_previo")) & (pl.col("close") < pl.col("maximo_previo")))
+            | ((pl.col("low") < pl.col("minimo_previo")) & (pl.col("close") > pl.col("minimo_previo")))
+        )
+        .select(
+            "fecha",
+            pl.when(pl.col("high") > pl.col("maximo_previo"))
+            .then(pl.lit("Barrido de máximo"))
+            .otherwise(pl.lit("Barrido de mínimo"))
+            .alias("tipo"),
+            pl.when(pl.col("high") > pl.col("maximo_previo"))
+            .then(pl.col("high"))
+            .otherwise(pl.col("low"))
+            .alias("precio"),
+            "close",
+        )
+    )
+    return AnalisisMensual(barras, perfil, diarios, niveles, candidatos)
+
+
+def construir_figura_mensual(analisis: AnalisisMensual, etiqueta: str) -> str:
+    """Construye precio/AVWAP, perfil, CVD proxy y expansión diaria."""
+    if analisis.barras.is_empty():
+        return ""
+    b = analisis.barras
+    p = analisis.perfil
+    d = analisis.diarios
+    fig = make_subplots(
+        rows=3, cols=2,
+        specs=[[{"colspan": 2}, None], [{"colspan": 2}, None], [{}, {}]],
+        row_heights=[0.50, 0.22, 0.28],
+        vertical_spacing=0.07,
+        horizontal_spacing=0.08,
+        subplot_titles=(
+            f"Precio M1 y AVWAP · {etiqueta}",
+            "CVD proxy M1",
+            "Composite Volume Profile proxy",
+            "Rango diario / ATR14",
+        ),
+    )
+    fig.add_trace(go.Scattergl(x=b["timestamp"], y=b["close"], name="Cierre M1", line={"color": "#e4e4e7", "width": 1}), row=1, col=1)
+    fig.add_trace(go.Scattergl(x=b["timestamp"], y=b["avwap"], name="AVWAP mensual", line={"color": "#3b82f6", "width": 2}), row=1, col=1)
+    for nombre, valor in analisis.niveles.items():
+        if nombre in {"Máximo mensual", "Mínimo mensual", "POC proxy"}:
+            fig.add_hline(y=valor, line_dash="dot", line_width=1, annotation_text=nombre, row=1, col=1)
+    fig.add_trace(go.Scattergl(x=b["timestamp"], y=b["cvd_proxy"], name="CVD proxy", fill="tozeroy", line={"color": "#d29922"}), row=2, col=1)
+    fig.add_trace(go.Bar(x=p["volumen"], y=p["nivel"], orientation="h", name="Volumen M1", marker_color="#10b981"), row=3, col=1)
+    fig.add_trace(go.Bar(x=d["fecha"], y=d["expansion_atr"], name="Expansión ATR", marker_color="#8b5cf6"), row=3, col=2)
+    fig.add_hline(y=1.0, line_dash="dash", line_color="#f59e0b", row=3, col=2)
+    fig.update_layout(template="plotly_dark", height=1050, paper_bgcolor="#09090b", plot_bgcolor="#18181b", margin={"l": 55, "r": 25, "t": 75, "b": 40}, legend={"orientation": "h"})
+    fig.update_xaxes(rangeslider_visible=False)
+    return fig.to_html(full_html=False, include_plotlyjs="cdn")
+
+
+def tabla_analisis(analisis: AnalisisMensual) -> str:
+    """Renderiza tablas compactas sin introducir nuevas reglas CSS."""
+    if analisis.barras.is_empty():
+        return '<section class="details"><p>Sin barras para análisis mensual.</p></section>'
+    niveles = "".join(
+        f"<tr><td>{html.escape(nombre)}</td><td>{valor:,.4f}</td></tr>"
+        for nombre, valor in analisis.niveles.items()
+    )
+    ultimos = analisis.diarios.tail(10).select("fecha", "open", "high", "low", "close", "atr14", "expansion_atr").to_dicts()
+    diarios = "".join(
+        f"<tr><td>{fila['fecha']}</td><td>{fila['open']:,.4f}</td><td>{fila['high']:,.4f}</td><td>{fila['low']:,.4f}</td><td>{fila['close']:,.4f}</td><td>{fila['atr14']:,.4f}</td><td>{fila['expansion_atr']:,.2f}</td></tr>"
+        for fila in ultimos
+    )
+    sweeps_rows = analisis.sweeps.to_dicts()
+    sweeps = "".join(
+        f"<tr><td>{fila['fecha']}</td><td>{html.escape(fila['tipo'])}</td><td>{fila['precio']:,.4f}</td><td>{fila['close']:,.4f}</td></tr>"
+        for fila in sweeps_rows
+    ) or '<tr><td colspan="4">Sin sweeps diarios confirmados.</td></tr>'
+    return f"""<section class="details"><h3>Niveles macro</h3><table><thead><tr><th>Nivel</th><th>Precio</th></tr></thead><tbody>{niveles}</tbody></table></section>
+<section class="details"><h3>Últimos 10 días: ATR y expansión</h3><table><thead><tr><th>Fecha</th><th>Apertura</th><th>Máximo</th><th>Mínimo</th><th>Cierre</th><th>ATR14</th><th>Rango/ATR</th></tr></thead><tbody>{diarios}</tbody></table></section>
+<section class="details"><h3>Sweeps de niveles diarios previos</h3><table><thead><tr><th>Fecha</th><th>Tipo</th><th>Extremo</th><th>Cierre</th></tr></thead><tbody>{sweeps}</tbody></table></section>"""
 
 
 def crear_periodo_mensual(
@@ -451,6 +638,8 @@ def render_war_room(
     cobertura: CoberturaMensual | None = None,
     archivos: int = 0,
     duracion_ms: float | None = None,
+    grafico: str = "",
+    analitica_html: str = "",
 ) -> HTMLResponse:
     """Renderiza el estado mensual sin persistir resultados.
 
@@ -628,6 +817,8 @@ article strong {{ font-size: 1.25rem; color: #3b82f6; }}
 {_selector_periodo(year, month)}
 {aviso}
 {resumen}
+{grafico}
+{analitica_html}
 </body>
 </html>"""
     )
@@ -686,6 +877,9 @@ def war_room_home(
             barras,
             periodo,
         )
+        analisis = calcular_analisis_mensual(barras)
+        grafico = construir_figura_mensual(analisis, periodo.etiqueta)
+        analitica_html = tabla_analisis(analisis)
         duracion_ms = (
             perf_counter() - inicio_medicion
         ) * 1000.0
@@ -710,6 +904,8 @@ def war_room_home(
             cobertura=cobertura,
             archivos=len(archivos),
             duracion_ms=duracion_ms,
+            grafico=grafico,
+            analitica_html=analitica_html,
         )
 
     except ValueError as exc:

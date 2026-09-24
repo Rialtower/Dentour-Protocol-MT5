@@ -409,29 +409,51 @@ def _intervalo_sesion(dia: date, sesion: SessionWindow) -> tuple[datetime, datet
 # Agrupa ticks de 07:00 a 10:00 COT por niveles de precio discretizados y clasifica nodos de alto/bajo volumen.
 # Devuelve Pandas porque el resultado terminará convertido a una tabla HTML.
 def clusters_volumen(ticks: pl.DataFrame, sesion: SessionWindow, paso: float = 0.50) -> pd.DataFrame:
-    # Restringe el perfil de volumen a la sesión de interés 07:00-10:00 COT.
+    """Agrupa volumen por nivel y muestra la vela M1 representativa de cada POI.
+
+    El timestamp corresponde a la vela M1 con mayor volumen negociado en ese nivel.
+    """
     t = filtrar_sesion(ticks, sesion)
-    # Devuelve una tabla vacía con columnas estables para que el renderizado no falle.
+    columnas = ["Timestamp vela COT", "Nivel", "Volumen", "Delta neto", "Clasificacion"]
     if t.is_empty():
-        return pd.DataFrame(columns=["Nivel", "Volumen", "Delta neto", "Clasificacion"])
-    # Redondea cada precio al múltiplo de `paso`, suma volumen/delta por nivel y ordena por volumen.
-    agrupado = (t.with_columns(nivel=(pl.col("precio") / paso).round() * paso)
-                .group_by("nivel").agg(pl.col("peso").sum().alias("volumen"),
-                                       pl.col("delta").sum().alias("delta_neto"))
-                .sort("volumen", descending=True))
-    # Convierte el resultado pequeño a Pandas para etiquetado y salida HTML.
+        return pd.DataFrame(columns=columnas)
+
+    por_vela = (
+        t.with_columns(
+            nivel=(pl.col("precio") / paso).round() * paso,
+            timestamp_vela=pl.col("timestamp").dt.truncate("1m"),
+        )
+        .group_by("nivel", "timestamp_vela")
+        .agg(
+            pl.col("peso").sum().alias("volumen_vela"),
+            pl.col("delta").sum().alias("delta_vela"),
+        )
+    )
+
+    agrupado = (
+        por_vela.sort(["nivel", "volumen_vela", "timestamp_vela"], descending=[False, True, False])
+        .group_by("nivel", maintain_order=True)
+        .agg(
+            pl.col("volumen_vela").sum().alias("volumen"),
+            pl.col("delta_vela").sum().alias("delta_neto"),
+            pl.col("timestamp_vela").first().alias("timestamp_vela"),
+        )
+        .sort("volumen", descending=True)
+    )
+
     pdf = agrupado.to_pandas()
-    # Inicializa todos los niveles como neutrales antes de aplicar reglas HVN y LVN.
     pdf["clasificacion"] = "Neutral"
-    # Marca hasta tres niveles con mayor volumen como High Volume Nodes o puntos de interés.
     pdf.loc[pdf.nlargest(min(3, len(pdf)), "volumen").index, "clasificacion"] = "HVN / POI"
-    # Excluye los HVN para que un mismo nivel no reciba dos clasificaciones.
     restantes = pdf[pdf["clasificacion"] == "Neutral"]
-    # Marca hasta dos niveles restantes con menor volumen como Low Volume Nodes.
     pdf.loc[restantes.nsmallest(min(2, len(restantes)), "volumen").index, "clasificacion"] = "LVN"
-    # Normaliza encabezados para mostrarlos directamente al usuario.
-    return pdf.rename(columns={"nivel": "Nivel", "volumen": "Volumen",
-                               "delta_neto": "Delta neto", "clasificacion": "Clasificacion"})
+    pdf["timestamp_vela"] = pd.to_datetime(pdf["timestamp_vela"]).dt.strftime("%Y-%m-%d %H:%M:%S")
+    return pdf.rename(columns={
+        "timestamp_vela": "Timestamp vela COT",
+        "nivel": "Nivel",
+        "volumen": "Volumen",
+        "delta_neto": "Delta neto",
+        "clasificacion": "Clasificacion",
+    })[columnas]
 
 
 # Calcula métricas de dos rangos de apertura: extremos, expansión posterior, Z-score de volumen y dispersión respecto a VWAP.
@@ -452,7 +474,7 @@ def metricas_opening_range(
     sesion_m1 = filtrar_sesion(m1, sesion)
     if sesion_m1.is_empty():
         return pd.DataFrame(
-            columns=["Rango", "Maximo", "Minimo", "Z-Score volumen", "Std precio-VWAP", "Expansion max. puntos"]
+            columns=["Rango", "Timestamp maximo COT", "Maximo", "Timestamp minimo COT", "Minimo", "Z-Score volumen", "Std precio-VWAP", "Expansion max. puntos"]
         )
 
     volumenes = sesion_m1["volume"].to_numpy()
@@ -472,6 +494,8 @@ def metricas_opening_range(
 
         alto = float(or_df["high"].max())
         bajo = float(or_df["low"].min())
+        timestamp_alto = or_df.filter(pl.col("high") == alto)["timestamp"].min()
+        timestamp_bajo = or_df.filter(pl.col("low") == bajo)["timestamp"].min()
         posterior = sesion_m1.filter(pl.col("timestamp") >= fin_or_dt)
         expansion = 0.0 if posterior.is_empty() else max(
             float(posterior["high"].max()) - alto,
@@ -487,7 +511,9 @@ def metricas_opening_range(
         filas.append(
             {
                 "Rango": f"OR{minutos} desde {inicio_sesion:%H:%M}",
+                "Timestamp maximo COT": timestamp_alto.strftime("%Y-%m-%d %H:%M:%S"),
                 "Maximo": alto,
+                "Timestamp minimo COT": timestamp_bajo.strftime("%Y-%m-%d %H:%M:%S"),
                 "Minimo": bajo,
                 "Z-Score volumen": z,
                 "Std precio-VWAP": desv,

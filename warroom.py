@@ -807,6 +807,37 @@ article strong {{ font-size: 1.25rem; color: #3b82f6; }}
     border-color: #52525b;
     box-shadow: 0 0 0 1px rgba(161, 161, 170, 0.08);
 }}
+table {{
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 12px;
+    font-size: 14px;
+}}
+
+thead {{
+    background: #27272a;
+}}
+
+th {{
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 2px solid #3f3f46;
+    color: #fafafa;
+    font-weight: 600;
+}}
+
+td {{
+    padding: 8px 12px;
+    border-bottom: 1px solid #27272a;
+}}
+
+tbody tr:hover {{
+    background: rgba(59, 130, 246, 0.10);
+}}
+
+tbody tr:nth-child(even) {{
+    background: rgba(255,255,255,0.02);
+}}
 </style>
 </head>
 <body>

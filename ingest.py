@@ -380,20 +380,41 @@ def ejecutar_pipeline(tipos: Sequence[str] = TIPOS_DISPONIBLES,
                      if tipo == "ticks" else
                      # copy_rates_range devuelve barras cuyo tiempo de apertura cae dentro del intervalo solicitado.
                      mt5.copy_rates_range(SYMBOL, TIMEFRAMES[tipo], inicio, fin))
-            # Aplica la normalización específica y las validaciones antes de Arrow.
-            df = _normalizar_ticks(datos) if tipo == "ticks" else _normalizar_barras(datos)
-            # Devuelve temprano si MT5 no entregó registros; el pipeline decidirá si esto constituye un error.
+            # Normaliza una sola vez la respuesta recibida desde MT5.
             df = (
                 _normalizar_ticks(datos)
                 if tipo == "ticks"
                 else _normalizar_barras(datos)
             )
+
+            # Comprueba la respuesta antes de intentar acceder a sus columnas.
+            if datos is None or df.empty:
+                raise RuntimeError(
+                    f"MT5 no devolvió {tipo} entre {inicio} y {fin}. "
+                    f"Respuesta={'None' if datos is None else 'vacía'}; "
+                    f"MT5 last_error={mt5.last_error()}"
+                )
+
+            # Si existen filas, la normalización debe haber creado timestamp.
+            if "timestamp" not in df.columns:
+                raise RuntimeError(
+                    f"Esquema inesperado para {tipo}: falta la columna 'timestamp'. "
+                    f"Columnas recibidas={list(df.columns)}; "
+                    f"filas={len(df)}; intervalo=[{inicio}, {fin})"
+                )
+
+            # Conserva únicamente registros dentro del intervalo semiabierto solicitado.
             df = df.loc[
                 (df["timestamp"] >= inicio)
                 & (df["timestamp"] < fin)
-                ].copy()
+            ].copy()
+
             if df.empty:
-                raise RuntimeError(f"MT5 no devolvió {tipo} entre {inicio} y {fin}: {mt5.last_error()}")
+                raise RuntimeError(
+                    f"MT5 entregó registros para {tipo}, pero ninguno quedó dentro "
+                    f"del intervalo [{inicio}, {fin}). "
+                    f"MT5 last_error={mt5.last_error()}"
+                )
             # Coacciona al esquema explícito; safe=True evita conversiones potencialmente destructivas o fuera de rango.
             tabla = pa.Table.from_pandas(df, schema=SCHEMAS[tipo], preserve_index=False, safe=True)
             # Calcula y crea la partición donde se guardará el dataset.
